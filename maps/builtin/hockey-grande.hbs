@@ -1,0 +1,421 @@
+// Estadio integrado de HaxBort: Hockey Grande
+// Diseño propio. Formato .hbs (JSON5), compatible con el importador.
+{
+  "name": "Hockey Grande",
+  "width": 672,
+  "height": 320,
+  "spawnDistance": 270,
+  "maxViewWidth": 0,
+  "cameraFollow": "ball",
+  "kickOffReset": "partial",
+  "bg": {
+    "type": "hockey",
+    "width": 600,
+    "height": 280,
+    "kickOffRadius": 110,
+    "cornerRadius": 120,
+    "goalLine": 540,
+    "color": "5b7a8c"
+  },
+  "traits": {
+    "ballArea": {
+      "vis": false,
+      "bCoef": 1,
+      "cMask": [
+        "ball"
+      ]
+    },
+    "goalNet": {
+      "vis": true,
+      "bCoef": 0.1,
+      "cMask": [
+        "ball"
+      ],
+      "color": "f4f1de"
+    },
+    "goalPost": {
+      "radius": 8,
+      "invMass": 0,
+      "bCoef": 0.5
+    },
+    "kickOffBarrier": {
+      "vis": false,
+      "bCoef": 0.1,
+      "cGroup": [
+        "redKO",
+        "blueKO"
+      ],
+      "cMask": [
+        "red",
+        "blue"
+      ]
+    },
+    "playerArea": {
+      "bCoef": 0.1,
+      "cMask": [
+        "red",
+        "blue"
+      ]
+    }
+  },
+  "vertexes": [
+    {
+      "x": -480,
+      "y": -280,
+      "trait": "ballArea"
+    },
+    {
+      "x": 480,
+      "y": -280,
+      "trait": "ballArea"
+    },
+    {
+      "x": 600,
+      "y": -160,
+      "trait": "ballArea"
+    },
+    {
+      "x": 600,
+      "y": -75,
+      "trait": "ballArea"
+    },
+    {
+      "x": 600,
+      "y": 75,
+      "trait": "ballArea"
+    },
+    {
+      "x": 600,
+      "y": 160,
+      "trait": "ballArea"
+    },
+    {
+      "x": 480,
+      "y": 280,
+      "trait": "ballArea"
+    },
+    {
+      "x": -480,
+      "y": 280,
+      "trait": "ballArea"
+    },
+    {
+      "x": -600,
+      "y": 160,
+      "trait": "ballArea"
+    },
+    {
+      "x": -600,
+      "y": 75,
+      "trait": "ballArea"
+    },
+    {
+      "x": -600,
+      "y": -75,
+      "trait": "ballArea"
+    },
+    {
+      "x": -600,
+      "y": -160,
+      "trait": "ballArea"
+    },
+    {
+      "x": -540,
+      "y": -75,
+      "trait": "goalNet"
+    },
+    {
+      "x": -572,
+      "y": -63,
+      "trait": "goalNet"
+    },
+    {
+      "x": -572,
+      "y": 63,
+      "trait": "goalNet"
+    },
+    {
+      "x": -540,
+      "y": 75,
+      "trait": "goalNet"
+    },
+    {
+      "x": 540,
+      "y": -75,
+      "trait": "goalNet"
+    },
+    {
+      "x": 572,
+      "y": -63,
+      "trait": "goalNet"
+    },
+    {
+      "x": 572,
+      "y": 63,
+      "trait": "goalNet"
+    },
+    {
+      "x": 540,
+      "y": 75,
+      "trait": "goalNet"
+    },
+    {
+      "x": 0,
+      "y": -320,
+      "trait": "kickOffBarrier"
+    },
+    {
+      "x": 0,
+      "y": -110,
+      "trait": "kickOffBarrier"
+    },
+    {
+      "x": 0,
+      "y": 110,
+      "trait": "kickOffBarrier"
+    },
+    {
+      "x": 0,
+      "y": 320,
+      "trait": "kickOffBarrier"
+    }
+  ],
+  "segments": [
+    {
+      "v0": 0,
+      "v1": 1,
+      "trait": "ballArea"
+    },
+    {
+      "v0": 1,
+      "v1": 2,
+      "trait": "ballArea",
+      "curve": 90
+    },
+    {
+      "v0": 2,
+      "v1": 5,
+      "trait": "ballArea"
+    },
+    {
+      "v0": 5,
+      "v1": 6,
+      "trait": "ballArea",
+      "curve": 90
+    },
+    {
+      "v0": 6,
+      "v1": 7,
+      "trait": "ballArea"
+    },
+    {
+      "v0": 7,
+      "v1": 8,
+      "trait": "ballArea",
+      "curve": 90
+    },
+    {
+      "v0": 8,
+      "v1": 11,
+      "trait": "ballArea"
+    },
+    {
+      "v0": 11,
+      "v1": 0,
+      "trait": "ballArea",
+      "curve": 90
+    },
+    {
+      "v0": 12,
+      "v1": 13,
+      "trait": "goalNet",
+      "curve": -30
+    },
+    {
+      "v0": 13,
+      "v1": 14,
+      "trait": "goalNet",
+      "curve": -20
+    },
+    {
+      "v0": 14,
+      "v1": 15,
+      "trait": "goalNet",
+      "curve": -30
+    },
+    {
+      "v0": 16,
+      "v1": 17,
+      "trait": "goalNet",
+      "curve": 30
+    },
+    {
+      "v0": 17,
+      "v1": 18,
+      "trait": "goalNet",
+      "curve": 20
+    },
+    {
+      "v0": 18,
+      "v1": 19,
+      "trait": "goalNet",
+      "curve": 30
+    },
+    {
+      "v0": 20,
+      "v1": 21,
+      "trait": "kickOffBarrier"
+    },
+    {
+      "v0": 22,
+      "v1": 23,
+      "trait": "kickOffBarrier"
+    },
+    {
+      "v0": 21,
+      "v1": 22,
+      "trait": "kickOffBarrier",
+      "cGroup": [
+        "redKO"
+      ],
+      "curve": 180
+    },
+    {
+      "v0": 21,
+      "v1": 22,
+      "trait": "kickOffBarrier",
+      "cGroup": [
+        "blueKO"
+      ],
+      "curve": -180
+    }
+  ],
+  "goals": [
+    {
+      "p0": [
+        -542,
+        -67
+      ],
+      "p1": [
+        -542,
+        67
+      ],
+      "team": "red"
+    },
+    {
+      "p0": [
+        542,
+        -67
+      ],
+      "p1": [
+        542,
+        67
+      ],
+      "team": "blue"
+    }
+  ],
+  "discs": [
+    {
+      "pos": [
+        -540,
+        -75
+      ],
+      "trait": "goalPost",
+      "color": "f2b5ae"
+    },
+    {
+      "pos": [
+        -540,
+        75
+      ],
+      "trait": "goalPost",
+      "color": "f2b5ae"
+    },
+    {
+      "pos": [
+        540,
+        -75
+      ],
+      "trait": "goalPost",
+      "color": "aec8f2"
+    },
+    {
+      "pos": [
+        540,
+        75
+      ],
+      "trait": "goalPost",
+      "color": "aec8f2"
+    }
+  ],
+  "planes": [
+    {
+      "normal": [
+        0,
+        1
+      ],
+      "dist": -320,
+      "trait": "playerArea"
+    },
+    {
+      "normal": [
+        0,
+        -1
+      ],
+      "dist": -320,
+      "trait": "playerArea"
+    },
+    {
+      "normal": [
+        1,
+        0
+      ],
+      "dist": -640,
+      "trait": "playerArea"
+    },
+    {
+      "normal": [
+        -1,
+        0
+      ],
+      "dist": -640,
+      "trait": "playerArea"
+    },
+    {
+      "normal": [
+        0,
+        1
+      ],
+      "dist": -360,
+      "bCoef": 0.5,
+      "cMask": [
+        "ball"
+      ]
+    },
+    {
+      "normal": [
+        0,
+        -1
+      ],
+      "dist": -360,
+      "bCoef": 0.5,
+      "cMask": [
+        "ball"
+      ]
+    }
+  ],
+  "ballPhysics": {
+    "radius": 7,
+    "bCoef": 0.8,
+    "invMass": 1,
+    "damping": 0.995,
+    "color": "1d1d1d"
+  },
+  "playerPhysics": {
+    "damping": 0.983,
+    "acceleration": 0.078,
+    "kickingAcceleration": 0.056,
+    "kickingDamping": 0.983,
+    "kickStrength": 6
+  }
+}

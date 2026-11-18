@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: haxbort
+    runtime: node
+    plan: free
+    # Virginia: la región de Render más cercana a Argentina (para el relay y las salas en el servidor).
+    region: virginia
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

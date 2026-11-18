@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HaxBort</title>
+<meta name="description" content="HaxBort: fútbol de discos multijugador en el navegador. Creá una sala, pasá el código y jugá.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23182622'/%3E%3Ccircle cx='32' cy='32' r='15' fill='%23fff' stroke='%23f4c04e' stroke-width='5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;700;800&family=Rubik:wght@400;500;600&display=swap">
+<style>
+/* Concepto: estadio de noche. La cancha siempre está de fondo (en el inicio juegan dos bots);
+   los menús son tableros oscuros con borde de tiza y un acento amarillo de reflector.
+   Un solo look oscuro a propósito (es un juego). Todos los colores salen de estos tokens. */
+:root {
+  --night: #0d1513;
+  --turf: #14211d;
+  --panel: #172420;
+  --panel-2: #1e2f2a;
+  --panel-3: #253a34;
+  --line: #2c403a;
+  --chalk: #e9f1ea;
+  --muted: #94aa9f;
+  --flood: #f4c04e;
+  --flood-ink: #1b1606;
+  --red: #e5574a;
+  --red-soft: rgba(229, 87, 74, .14);
+  --blue: #3f7be0;
+  --blue-soft: rgba(63, 123, 224, .14);
+  --spec: #8a9a93;
+  --good: #5fd48a;
+  --bad: #ff7a6b;
+  --display: 'Saira Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --body: 'Rubik', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --gutter: max(16px, env(safe-area-inset-left, 0px));
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--night); color: var(--chalk); font: 15px/1.45 var(--body); overflow: hidden; }
+:focus-visible { outline: 2px solid var(--flood); outline-offset: 2px; }
+button { font: inherit; color: inherit; }
+p { margin: 0; }
+h1, h2, h3 { margin: 0; }
+h2 { font: 700 22px/1.1 var(--display); text-transform: uppercase; letter-spacing: .03em; }
+h3 { font: 600 12px var(--body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grow { flex: 1; }
+
+/* ---------- controles base ---------- */
+.btn { min-height: 40px; padding: 0 16px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2); color: var(--chalk);
+  font: 600 14px var(--body); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--muted); }
+.btn.primary { background: var(--flood); border-color: var(--flood); color: var(--flood-ink); }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--flood); }
+.btn.go { background: var(--good); border-color: var(--good); color: #062012; }
+.btn.ghost { background: transparent; }
+.btn.danger { color: var(--bad); }
+.btn.big { min-height: 52px; font: 800 20px var(--display); letter-spacing: .05em; text-transform: uppercase; padding: 0 26px; }
+.btn:disabled { opacity: .45; cursor: default; }
+.field { display: grid; gap: 4px; font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+select, .input { background: var(--panel-2); color: var(--chalk); border: 1px solid var(--line); border-radius: 9px; font: 500 15px var(--body);
+  min-height: 42px; padding: 0 12px; width: 100%; }
+.input:focus, select:focus { border-color: var(--flood); outline: none; }
+textarea.input { padding: 8px 10px; min-height: 90px; resize: vertical; }
+.code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace !important; }
+kbd { font: 600 12px ui-monospace, Menlo, monospace; background: var(--panel-2); border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+.note { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--flood); }
+
+/* ---------- cancha de fondo ---------- */
+.pitch { position: fixed; inset: 0; background: var(--turf); }
+.pitch:focus-visible { outline: none; }
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+body.outside .pitch::after { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(5,9,8,.35), rgba(5,9,8,.82)); }
+body.outside .hud, body.outside .corner-btns, body.outside .hint, body.outside .chat { display: none; }
+.hud { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 50%; translate: -50% 0; display: flex; pointer-events: none;
+  font: 800 26px/1 var(--display); font-variant-numeric: tabular-nums; border-radius: 10px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,.4); z-index: 2; }
+.hud span { padding: 6px 14px; }
+.hud .red { background: var(--red); }
+.hud .blue { background: var(--blue); }
+.hud #clock { background: rgba(10, 16, 14, .86); color: var(--flood); min-width: 78px; text-align: center; letter-spacing: .04em; }
+.hud #clock.ot { color: var(--bad); }
+.hud .paused { background: rgba(10,16,14,.86); color: var(--chalk); font-size: 15px; display: flex; align-items: center; letter-spacing: .1em; }
+.corner-btns { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: var(--gutter); display: flex; gap: 8px; z-index: 2; }
+.icon-btn { width: 42px; height: 42px; border-radius: 10px; border: 1px solid rgba(233,241,234,.18); background: rgba(10,16,14,.6); color: var(--chalk);
+  font: 600 18px var(--body); cursor: pointer; display: grid; place-items: center; backdrop-filter: blur(4px); padding: 0; }
+.icon-btn:hover { border-color: rgba(233,241,234,.4); }
+.netinfo { position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); font: 500 12px var(--body);
+  color: rgba(233,241,234,.6); text-align: right; pointer-events: none; z-index: 2; }
+.netinfo b { color: var(--chalk); letter-spacing: .08em; }
+.hint { position: absolute; right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(10px + env(safe-area-inset-bottom, 0px)); font: 500 12px var(--body);
+  color: rgba(233,241,234,.55); pointer-events: none; text-align: right; }
+.banner { position: absolute; left: 50%; top: 40%; translate: -50% -50%; max-width: min(90%, 640px); text-align: center;
+  font: 800 clamp(22px, 4vw, 42px)/1.05 var(--display); text-transform: uppercase; letter-spacing: .02em;
+  padding: 12px 22px; border-radius: 12px; background: rgba(10, 16, 14, .82); box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  animation: pop .35s cubic-bezier(.2, .9, .3, 1.3); pointer-events: none; z-index: 3; }
+.banner.red { color: #ffd2cc; box-shadow: inset 0 -4px 0 var(--red), 0 10px 40px rgba(0,0,0,.5); }
+.banner.blue { color: #d3e1ff; box-shadow: inset 0 -4px 0 var(--blue), 0 10px 40px rgba(0,0,0,.5); }
+@keyframes pop { from { scale: .7; opacity: 0; } }
+@keyframes rise { from { opacity: 0; translate: 0 14px; } }
+@keyframes fade { from { opacity: 0; } }
+.toast { position: fixed; left: 50%; top: calc(64px + env(safe-area-inset-top, 0px)); translate: -50% 0; background: var(--panel-3); border: 1px solid var(--line);
+  padding: 10px 16px; border-radius: 10px; font-weight: 500; max-width: calc(100% - 32px); z-index: 60; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+
+/* ---------- pantallas de afuera (inicio, nombre, salas) ---------- */
+.screen { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; overflow: auto;
+  padding: calc(20px + env(safe-area-inset-top, 0px)) var(--gutter) calc(20px + env(safe-area-inset-bottom, 0px)); animation: fade .2s; }
+.logo { font: 800 clamp(64px, 14vw, 148px)/.85 var(--display); letter-spacing: .01em; text-transform: uppercase; text-align: center;
+  text-shadow: 0 8px 40px rgba(0,0,0,.6); }
+.logo span { color: var(--flood); }
+.logo-ball { display: inline-block; width: .62em; height: .62em; border-radius: 50%; background: #fff; border: .07em solid var(--flood); vertical-align: .08em; margin: 0 .02em;
+  box-shadow: 0 0 40px rgba(244,192,78,.45); }
+.welcome { display: grid; gap: 22px; justify-items: center; text-align: center; animation: rise .5s cubic-bezier(.2,.8,.3,1); }
+.welcome .kicker { font: 700 16px var(--display); letter-spacing: .32em; text-transform: uppercase; color: var(--muted); }
+.welcome .tag { font-size: 17px; color: #c6d4cc; max-width: 32ch; }
+.welcome .btn.big { min-width: 220px; min-height: 60px; font-size: 26px; border-radius: 12px; box-shadow: 0 10px 40px rgba(244,192,78,.25); }
+.card { width: min(460px, 100%); background: rgba(23, 36, 32, .94); border: 1px solid var(--line); border-radius: 18px; padding: 24px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.55); display: grid; gap: 18px; animation: rise .35s cubic-bezier(.2,.8,.3,1); backdrop-filter: blur(6px); }
+.card.wide { width: min(860px, 100%); }
+.card-top { display: flex; align-items: center; gap: 12px; }
+.card-top .mini-logo { font: 800 22px/1 var(--display); text-transform: uppercase; }
+.card-top .mini-logo span { color: var(--flood); }
+.back { margin-left: auto; }
+.avatar-pick { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; align-items: center; }
+.avatar-big { width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center; font: 800 32px var(--display); background: var(--red);
+  border: 4px solid #0b0f10; box-shadow: 0 0 0 2px var(--line); }
+.lobby { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.choice { background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 12px; align-content: start; }
+.choice h2 { display: flex; align-items: center; gap: 10px; }
+.choice h2 i { font-style: normal; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; background: var(--panel-3); font-size: 18px; }
+.code-input { font: 800 32px/1 var(--display) !important; letter-spacing: .3em; text-align: center; text-transform: uppercase; min-height: 58px; }
+.code-input::placeholder { color: #4b6159; letter-spacing: .3em; }
+.rooms-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
+.room-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; background: var(--panel-2); border: 1px solid transparent;
+  border-radius: 10px; padding: 10px 12px; cursor: pointer; text-align: left; }
+.room-row:hover { border-color: var(--line); }
+.room-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.room-row .meta { font-size: 12px; color: var(--muted); }
+.room-row .count { font: 700 16px var(--display); font-variant-numeric: tabular-nums; }
+.lobby-foot { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; }
+
+/* ---------- sala (el "vestuario" sobre la cancha) ---------- */
+.room { position: fixed; inset: 0; z-index: 20; display: grid; grid-template-rows: minmax(0, 1fr) auto; justify-items: center; gap: 10px;
+  background: rgba(5, 9, 8, .55); backdrop-filter: blur(2px); animation: fade .15s;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) var(--gutter) calc(12px + env(safe-area-inset-bottom, 0px)); }
+.room-card { width: min(1000px, 100%); align-self: center; max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.6); display: grid; }
+.room-head { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 14px 16px; border-bottom: 3px solid var(--flood); }
+.room-title { display: grid; gap: 2px; min-width: 0; margin-right: auto; }
+.room-title h1 { font: 800 26px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-title .small { display: flex; gap: 8px; flex-wrap: wrap; }
+.code-chip { display: inline-flex; align-items: center; gap: 8px; background: var(--panel-2); border: 1px dashed var(--flood); color: var(--chalk); border-radius: 9px;
+  padding: 0 12px; min-height: 40px; cursor: pointer; font: 600 13px var(--body); }
+.code-chip b { font: 800 22px/1 var(--display); letter-spacing: .18em; color: var(--flood); }
+.room-body { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 14px; padding: 16px; }
+.side-actions { display: grid; gap: 8px; align-content: start; }
+.side-actions .btn { width: 100%; justify-content: flex-start; padding: 0 12px; }
+.side-actions .btn .ic { width: 16px; text-align: center; }
+.side-actions .btn.on { border-color: var(--flood); color: var(--flood); }
+.teams { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.team { display: grid; grid-template-rows: auto 1fr auto; border-radius: 12px; background: var(--panel-2); min-height: 250px; overflow: hidden; border: 2px solid transparent; transition: border-color .12s; }
+.team.drop-on { border-color: var(--flood); }
+.team-head { display: flex; align-items: stretch; }
+.team-join { flex: 1; min-height: 42px; border: 0; cursor: pointer; font: 800 19px var(--display); letter-spacing: .06em; text-transform: uppercase; display: flex;
+  align-items: center; justify-content: center; gap: 8px; }
+.team-join small { font: 600 12px var(--body); opacity: .75; letter-spacing: 0; }
+.team-join:disabled { cursor: default; }
+.team.red .team-join { background: var(--red); color: #fff; }
+.team.blue .team-join { background: var(--blue); color: #fff; }
+.team.spectator .team-join { background: var(--panel-3); color: var(--chalk); }
+.team-join:hover:not(:disabled) { filter: brightness(1.1); }
+.plist { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; align-content: start; min-height: 120px; }
+.team.red .plist { background: linear-gradient(var(--red-soft), transparent 70%); }
+.team.blue .plist { background: linear-gradient(var(--blue-soft), transparent 70%); }
+.prow { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(0,0,0,.22); min-width: 0; cursor: default; position: relative; }
+.prow[draggable='true'] { cursor: grab; }
+.prow.me { box-shadow: inset 3px 0 0 var(--flood); }
+.prow.away { opacity: .5; }
+.prow .av { width: 26px; height: 26px; flex: none; border-radius: 50%; display: grid; place-items: center; font: 700 13px var(--display); border: 2px solid #0b0f10; color: #fff; }
+.prow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
+.prow .crown { color: var(--flood); font-size: 13px; }
+.prow .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; }
+.prow .ping { font: 600 12px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 26px; text-align: right; }
+.prow .ping.bad { color: var(--bad); }
+.prow .more { width: 26px; height: 26px; border-radius: 6px; border: 1px solid transparent; background: none; cursor: pointer; color: var(--muted); padding: 0; flex: none; }
+.prow .more:hover { border-color: var(--line); color: var(--chalk); }
+.empty { font-size: 13px; color: var(--muted); padding: 10px 6px; text-align: center; }
+.team-foot { padding: 6px; display: flex; gap: 6px; }
+.team-foot .btn { flex: 1; min-height: 32px; font-size: 13px; padding: 0 8px; background: transparent; }
+.room-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 18px; align-items: end; padding: 0 16px 16px; }
+.rules { display: grid; grid-template-columns: 110px 110px minmax(0, 1fr); gap: 10px; align-items: end; }
+.stadium-pick { display: flex; gap: 8px; align-items: center; min-height: 42px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 0 4px 0 12px; }
+.stadium-pick strong { color: var(--chalk); font: 600 15px var(--body); text-transform: none; letter-spacing: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.stadium-pick .btn { min-height: 34px; }
+.match-btns { display: flex; gap: 8px; align-items: center; }
+.state-line { grid-column: 1 / -1; font-size: 13px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.live { background: var(--good); box-shadow: 0 0 0 4px rgba(95,212,138,.18); }
+
+/* menú contextual de jugador */
+.pmenu { position: fixed; z-index: 70; min-width: 190px; background: var(--panel-3); border: 1px solid var(--line); border-radius: 10px; padding: 6px;
+  box-shadow: 0 16px 40px rgba(0,0,0,.5); display: grid; gap: 2px; animation: fade .1s; }
+.pmenu b { padding: 6px 10px 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.pmenu button { text-align: left; background: none; border: 0; border-radius: 7px; padding: 8px 10px; cursor: pointer; font-size: 14px; }
+.pmenu button:hover { background: var(--panel-2); }
+.pmenu button.danger { color: var(--bad); }
+
+/* ---------- chat ---------- */
+.chat { position: absolute; left: var(--gutter); bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: min(440px, calc(100% - 32px)); display: grid; gap: 6px; z-index: 4; }
+.chat-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 40vh; overflow: hidden; align-content: end; }
+.chat-log li { font-size: 14px; line-height: 1.3; padding: 3px 8px; border-radius: 6px; background: rgba(10,16,14,.55); width: fit-content; max-width: 100%;
+  overflow-wrap: anywhere; transition: opacity .6s; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+.chat-log li.old { opacity: 0; }
+.chat.open .chat-log { overflow: auto; }
+.chat.open .chat-log li.old { opacity: 1; }
+.chat-log b { font-weight: 600; }
+.chat-log .sys { color: var(--flood); }
+.chat-log .help { color: var(--muted); }
+.chat-log .red b { color: #ff9c90; }
+.chat-log .blue b { color: #9cbcff; }
+.chat-log .spectator b { color: #c9d4cf; }
+.chat-bar { display: flex; gap: 6px; }
+.chat-bar input { flex: 1; min-width: 0; min-height: 40px; border-radius: 9px; border: 1px solid var(--flood); background: rgba(10,16,14,.92); color: var(--chalk);
+  font: 500 15px var(--body); padding: 0 12px; }
+.chat-bar input:focus { outline: none; }
+/* En la sala, el chat queda fijo abajo como un panel. */
+.room-chat { width: min(1000px, 100%); background: rgba(23, 36, 32, .96); border: 1px solid var(--line); border-radius: 14px; padding: 8px; display: grid; gap: 6px; }
+.room-chat .chat-log { height: clamp(90px, 18vh, 170px); max-height: none; overflow: auto; align-content: start; }
+.room-chat .chat-log li { background: none; padding: 1px 4px; text-shadow: none; }
+.room-chat .chat-log li.old { opacity: 1; }
+.room-chat .chat-bar input { border-color: var(--line); }
+.room-chat .chat-bar input:focus { border-color: var(--flood); }
+
+/* ---------- modales (estadios, ajustes) ---------- */
+.modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; background: rgba(5,9,8,.7); animation: fade .15s;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter) calc(16px + env(safe-area-inset-bottom, 0px)); }
+.modal-card { width: min(1000px, 100%); max-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 16px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+.modal-card.narrow { width: min(560px, 100%); }
+.modal-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.modal-head h2 { padding-bottom: 10px; }
+.tabs { display: flex; gap: 2px; margin-right: auto; }
+.tabs button { background: none; border: 0; color: var(--muted); font: 600 13px var(--body); letter-spacing: .07em; text-transform: uppercase; padding: 10px 12px 12px;
+  border-bottom: 3px solid transparent; cursor: pointer; }
+.tabs button[aria-selected='true'] { color: var(--chalk); border-color: var(--flood); }
+.modal-head .btn { margin-bottom: 8px; }
+.panel { overflow: auto; padding: 16px; display: grid; gap: 14px; align-content: start; min-height: 0; }
+.maps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.map-card { background: var(--panel-2); border: 2px solid transparent; border-radius: 10px; padding: 6px; display: grid; gap: 4px; cursor: pointer; text-align: left; color: var(--chalk); font: inherit; }
+.map-card:hover { border-color: var(--line); }
+.map-card.on { border-color: var(--flood); }
+.map-card span { font: 700 15px var(--display); text-transform: uppercase; letter-spacing: .02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumb { width: 100%; max-width: 100%; aspect-ratio: 12 / 7; border-radius: 6px; background: var(--night); object-fit: cover; display: block; }
+.cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.drop { display: grid; gap: 6px; place-items: center; text-align: center; padding: 18px; border: 2px dashed var(--line); border-radius: 12px; cursor: pointer; }
+.drop.over { border-color: var(--flood); background: rgba(244, 192, 78, .08); }
+.drop strong { font: 700 18px var(--display); text-transform: uppercase; letter-spacing: .03em; }
+.import-card, .lib-item { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.import-card.bad { border-color: rgba(255, 122, 107, .5); }
+.import-card header { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+.import-card header strong { font: 700 18px var(--display); text-transform: uppercase; }
+.pill { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; }
+.pill.good { background: rgba(95, 212, 138, .15); color: var(--good); }
+.pill.bad { background: rgba(255, 122, 107, .15); color: var(--bad); }
+.report { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 3px; }
+.report.errors { color: var(--bad); }
+.report.warnings { color: #e6cf8f; }
+.report code { font-size: 12px; color: var(--chalk); background: rgba(0,0,0,.3); padding: 0 4px; border-radius: 4px; }
+.lib-item { grid-template-columns: 96px minmax(0, 1fr); align-items: start; }
+.lib-body { display: grid; gap: 6px; min-width: 0; }
+.lib-body .name { font-weight: 600; flex: 1; min-width: 0; }
+.star { background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
+.star.on { color: var(--flood); }
+.export { display: grid; gap: 6px; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; font-size: 14px; }
+
+/* ---------- táctil ---------- */
+.touch { position: absolute; inset: auto 0 0 0; height: 46%; pointer-events: none; z-index: 3; }
+.stick { pointer-events: auto; position: absolute; left: max(18px, env(safe-area-inset-left, 0px)); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); width: 120px; height: 120px; border-radius: 50%;
+  background: rgba(233, 241, 234, .1); border: 2px solid rgba(233, 241, 234, .25); touch-action: none; }
+.knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px; border-radius: 50%; background: rgba(233, 241, 234, .5); }
+.kickbtn { pointer-events: auto; position: absolute; right: max(18px, env(safe-area-inset-right, 0px)); bottom: calc(30px + env(safe-area-inset-bottom, 0px)); width: 88px; height: 88px; border-radius: 50%;
+  border: 3px solid var(--chalk); background: rgba(229, 87, 74, .55); color: var(--chalk); font: 800 18px var(--display); touch-action: none; }
+.kickbtn.on { background: var(--chalk); color: var(--night); }
+body.touch-on .chat { bottom: calc(160px + env(safe-area-inset-bottom, 0px)); }
+body.touch-on .hint { display: none; }
+
+@media (max-width: 820px) {
+  .lobby, .cols2 { grid-template-columns: 1fr; }
+  .room-body { grid-template-columns: 1fr; }
+  .side-actions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .side-actions .btn { justify-content: center; padding: 0 6px; font-size: 13px; }
+  .room-foot { grid-template-columns: 1fr; }
+  .match-btns .btn { flex: 1; }
+}
+@media (max-width: 620px) {
+  .teams { grid-template-columns: 1fr; }
+  .team { min-height: 0; }
+  .plist { min-height: 0; }
+  .rules { grid-template-columns: 1fr 1fr; }
+  .rules .stadium-field { grid-column: 1 / -1; }
+  .room-title h1 { font-size: 22px; }
+  .card { padding: 18px; }
+}
+@media (max-width: 620px) {
+  .hud { left: auto; right: max(12px, env(safe-area-inset-right, 0px)); translate: none; font-size: 20px; }
+  .hud span { padding: 6px 10px; }
+  .hud #clock { min-width: 64px; }
+  .netinfo { top: calc(56px + env(safe-area-inset-top, 0px)); }
+  #btn-zoom-in, #btn-zoom-out { display: none; }
+  .side-actions .btn .ic { display: none; }
+  .room-chat .chat-log { height: 76px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body class="outside">
+<div class="pitch" id="pitch" tabindex="0" aria-label="Cancha. Movete con flechas o WASD y pateá con X o Espacio. Esc abre la sala y T el chat.">
+  <canvas id="game"></canvas>
+  <div class="hud" id="hud"><span class="red" id="s-red">0</span><span id="clock">00:00</span><span class="blue" id="s-blue">0</span><span class="paused" id="paused-tag" hidden>PAUSA</span></div>
+  <div class="corner-btns">
+    <button class="icon-btn" id="btn-menu" type="button" aria-label="Abrir la sala (Esc)" title="Sala (Esc)">☰</button>
+    <button class="icon-btn" id="btn-chat" type="button" aria-label="Abrir chat (T)" title="Chat (T)">💬</button>
+    <button class="icon-btn" id="btn-zoom-out" type="button" aria-label="Alejar (tecla −)" title="Alejar (−)">−</button>
+    <button class="icon-btn" id="btn-zoom-in" type="button" aria-label="Acercar (tecla +)" title="Acercar (+)">+</button>
+  </div>
+  <div class="netinfo" id="netinfo"></div>
+  <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
+  <div class="chat" id="chat">
+    <ul class="chat-log" id="chat-log" aria-live="polite" aria-label="Chat"></ul>
+    <form class="chat-bar" id="chat-bar" hidden>
+      <input id="chat-input" maxlength="140" autocomplete="off" placeholder="Escribí y Enter · /help para comandos" aria-label="Mensaje de chat">
+    </form>
+  </div>
+  <div class="hint"><kbd>Esc</kbd> sala · <kbd>T</kbd> chat · <kbd>+</kbd><kbd>−</kbd> zoom · <span id="fps"></span></div>
+  <div class="touch" id="touch" hidden>
+    <div class="stick" id="stick" aria-label="Joystick"><div class="knob" id="knob"></div></div>
+    <button class="kickbtn" id="kick" type="button" aria-label="Patear">PATEAR</button>
+  </div>
+</div>
+
+<!-- 1) Bienvenida -->
+<section class="screen" id="scr-welcome" aria-label="Bienvenida">
+  <div class="welcome">
+    <p class="kicker">Bienvenido a</p>
+    <h1 class="logo">Hax<span>B<i class="logo-ball" aria-hidden="true"></i>rt</span></h1>
+    <p class="tag">Fútbol de discos con amigos, en el navegador. Creá una sala, pasá el código y a jugar.</p>
+    <button class="btn primary big" id="btn-begin" type="button">Iniciar</button>
+  </div>
+</section>
+
+<!-- 2) Nombre -->
+<section class="screen" id="scr-name" aria-label="Tu nombre" hidden>
+  <form class="card" id="name-form">
+    <div class="card-top"><div class="mini-logo">Hax<span>Bort</span></div><button class="btn ghost back" type="button" data-back="welcome">← Volver</button></div>
+    <h2>¿Cómo te llamás?</h2>
+    <div class="avatar-pick">
+      <div class="avatar-big" id="avatar-preview" aria-hidden="true">?</div>
+      <div style="display:grid;gap:10px">
+        <label class="field">Nombre <input class="input" id="nick" maxlength="20" autocomplete="nickname" placeholder="Tu nombre en la cancha" required></label>
+        <label class="field">Avatar (1 o 2 letras o números) <input class="input" id="avatar" maxlength="2" placeholder="Ej: 10" style="max-width:120px"></label>
+      </div>
+    </div>
+    <button class="btn primary big" type="submit">Continuar</button>
+  </form>
+</section>
+
+<!-- 3) Crear o unirse -->
+<section class="screen" id="scr-lobby" aria-label="Salas" hidden>
+  <div class="card wide">
+    <div class="card-top">
+      <div class="mini-logo">Hax<span>Bort</span></div>
+      <span class="small muted" id="lobby-hello"></span>
+      <button class="btn ghost back" type="button" data-back="name">Cambiar nombre</button>
+    </div>
+    <div class="lobby">
+      <form class="choice" id="create-form">
+        <h2><i aria-hidden="true">＋</i>Crear sala</h2>
+        <label class="field">Nombre de la sala <input class="input" id="room-name" maxlength="32" placeholder="Sala de ..."></label>
+        <div class="row" style="align-items:end">
+          <label class="field grow">Jugadores máx.
+            <select id="room-max"><option>4</option><option>6</option><option selected>10</option><option>16</option><option>20</option><option>30</option></select>
+          </label>
+          <label class="field grow">Contraseña (opcional) <input class="input" id="room-pass" maxlength="20" autocomplete="off" placeholder="Sin contraseña"></label>
+        </div>
+        <label class="field">Dónde corre el partido
+          <select id="room-mode">
+            <option value="p2p" selected>En mi compu (menos ping)</option>
+            <option value="server">En el servidor (si tu conexión es mala)</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="room-public" checked> Mostrarla en la lista de salas públicas</label>
+        <button class="btn primary big" type="submit">Crear sala</button>
+      </form>
+      <form class="choice" id="join-form">
+        <h2><i aria-hidden="true">#</i>Unirse con código</h2>
+        <label class="field">Código de la sala <input class="input code-input" id="join-code" maxlength="5" autocomplete="off" spellcheck="false" placeholder="ABCDE"></label>
+        <label class="field" id="join-pass-field" hidden>Contraseña <input class="input" id="join-pass" maxlength="20" autocomplete="off"></label>
+        <button class="btn big" type="submit">Entrar</button>
+        <div class="row" style="justify-content:space-between"><h3>Salas públicas</h3><button class="btn ghost" type="button" id="btn-refresh" style="min-height:30px">↻ Actualizar</button></div>
+        <div class="rooms-list" id="rooms-list"></div>
+      </form>
+    </div>
+    <div class="lobby-foot">
+      <p class="small muted" id="server-state"></p>
+      <button class="btn ghost" type="button" id="btn-practice">Practicar solo contra bots</button>
+    </div>
+  </div>
+</section>
+
+<!-- 4) La sala (Esc) -->
+<section class="room" id="room" aria-label="Sala" hidden>
+  <div class="room-card">
+    <header class="room-head">
+      <div class="room-title">
+        <h1 id="room-title">Sala</h1>
+        <span class="small muted" id="room-sub"></span>
+      </div>
+      <button class="code-chip" type="button" id="btn-code" title="Copiar el link de la sala">Código <b id="room-code">-----</b> <span aria-hidden="true">🔗</span></button>
+      <button class="btn" type="button" id="btn-settings" title="Ajustes">⚙ Ajustes</button>
+      <button class="btn danger" type="button" id="btn-leave">Salir</button>
+    </header>
+    <div class="room-body">
+      <div class="side-actions" id="side-actions">
+        <button class="btn" type="button" id="btn-auto" title="Pasa a un espectador al equipo con menos jugadores"><span class="ic">⇄</span>Auto</button>
+        <button class="btn" type="button" id="btn-rand" title="Mezcla a todos los jugadores al azar"><span class="ic">🔀</span>Mezclar</button>
+        <button class="btn" type="button" id="btn-lock" title="Si está bloqueado, solo el admin cambia equipos"><span class="ic">🔓</span><span id="lock-label">Bloquear</span></button>
+        <button class="btn" type="button" id="btn-reset" title="Manda a todos a espectadores"><span class="ic">↺</span>Reiniciar</button>
+      </div>
+      <div class="teams" id="teams"></div>
+    </div>
+    <div class="room-foot">
+      <div class="rules">
+        <label class="field">Tiempo
+          <select id="time-select"><option value="1">1 min</option><option value="2">2 min</option><option value="3" selected>3 min</option><option value="5">5 min</option><option value="7">7 min</option><option value="10">10 min</option><option value="0">Sin límite</option></select>
+        </label>
+        <label class="field">Goles
+          <select id="score-select"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="5">5</option><option value="7">7</option><option value="10">10</option><option value="0">Sin límite</option></select>
+        </label>
+        <div class="field stadium-field">Estadio
+          <div class="stadium-pick"><strong id="stadium-name">Clásica</strong><button class="btn" type="button" id="btn-pick">Elegir</button></div>
+        </div>
+      </div>
+      <div class="match-btns" id="match-btns">
+        <button class="btn go big" type="button" id="btn-start">▶ Empezar</button>
+        <button class="btn" type="button" id="btn-pause" hidden>⏸ Pausar</button>
+        <button class="btn danger" type="button" id="btn-stop" hidden>■ Parar</button>
+      </div>
+      <p class="state-line" id="state-line"><span class="dot" id="state-dot"></span><span id="state-text"></span></p>
+    </div>
+  </div>
+  <div class="room-chat" id="room-chat-slot"></div>
+</section>
+
+<!-- Estadios -->
+<section class="modal" id="maps-modal" role="dialog" aria-modal="true" aria-label="Estadios" hidden>
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>Estadios</h2>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="pick" aria-selected="true">Elegir</button>
+        <button type="button" role="tab" data-tab="import" aria-selected="false">Importar .hbs</button>
+      </div>
+      <button class="btn ghost" type="button" data-close>Cerrar</button>
+    </div>
+    <div class="panel" data-panel="pick">
+      <h3>Integrados</h3>
+      <div class="maps-grid" id="maps-builtin"></div>
+      <div class="row" style="justify-content:space-between"><h3>Mi biblioteca</h3><span class="small muted" id="lib-count"></span></div>
+      <input class="input" id="lib-search" type="search" placeholder="Buscar por nombre o autor" aria-label="Buscar mapas">
+      <div id="lib-list" class="panel" style="padding:0"></div>
+      <p class="note">Tu biblioteca se guarda en este navegador. Al elegir un mapa propio, el servidor lo revisa y se lo manda a todos los de la sala.</p>
+    </div>
+    <div class="panel" data-panel="import" hidden>
+      <div class="cols2">
+        <div class="panel" style="padding:0">
+          <label class="drop" id="drop" for="file-input">
+            <strong>Soltá acá tus .hbs</strong>
+            <span class="small muted">o tocá para elegir archivos (.hbs, .json5, .json · hasta 1 MB c/u)</span>
+          </label>
+          <input id="file-input" type="file" accept=".hbs,.json,.json5,.txt" multiple hidden>
+          <label class="field" for="paste-area">O pegá el texto del estadio</label>
+          <textarea class="input code" id="paste-area" rows="5" placeholder='{ "name": "Mi estadio", "vertexes": [ ... ] }'></textarea>
+          <div class="row">
+            <button class="btn primary" id="btn-paste" type="button">Leer texto</button>
+            <button class="btn" id="btn-sample" type="button">Probar con un mapa de ejemplo</button>
+          </div>
+        </div>
+        <div id="import-results" class="panel" style="padding:0"><p class="small muted">Acá vas a ver si el mapa cargó bien, sus advertencias y la fuerza de la patada.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Ajustes -->
+<section class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="Ajustes" hidden>
+  <div class="modal-card narrow">
+    <div class="modal-head"><h2>Ajustes</h2><span class="grow"></span><button class="btn ghost" type="button" data-close>Cerrar</button></div>
+    <div class="panel">
+      <label class="field" for="zoom-range">Zoom <span id="zoom-label" style="text-transform:none;letter-spacing:0"></span>
+        <input id="zoom-range" type="range" min="1" max="3" step="0.05" style="accent-color:var(--flood)">
+      </label>
+      <label class="field" id="bot-skill-field">Nivel de los bots
+        <select id="bot-skill"><option value="0.55">Tranqui</option><option value="0.8" selected>Normal</option><option value="0.97">Picante</option></select>
+      </label>
+      <label class="check"><input type="checkbox" id="opt-sound" checked> Sonidos</label>
+      <h3>Controles</h3>
+      <div class="keys">
+        <kbd>← ↑ → ↓</kbd><span>o <kbd>W A S D</kbd> para moverte</span>
+        <kbd>X</kbd><span>o <kbd>Espacio</kbd>: mantené y patea cuando llega la pelota (anillo blanco)</span>
+        <kbd>Esc</kbd><span>abre y cierra la sala</span>
+        <kbd>T</kbd><span>chat · <kbd>Enter</kbd> envía · <kbd>/help</kbd> comandos</span>
+        <kbd>+ −</kbd><span>zoom (también la rueda). <kbd>0</kbd> muestra toda la cancha; de cerca la cámara te sigue.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script>/*BUNDLE*/</script>
+</body>
+</html>

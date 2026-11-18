@@ -1,0 +1,57 @@
+// Mapa de ejemplo para probar el importador: usa JSON5 (comentarios, claves sin
+// comillas, comas finales), traits anidados, arcos, gravedad, uniones y discos móviles.
+export const SAMPLE_LAB = `// Laboratorio HaxBort: un estadio para probar todo el formato .hbs
+{
+  name: 'Laboratorio',
+  width: 470, height: 230,
+  spawnDistance: 170,
+  bg: { type: 'grass', width: 400, height: 190, kickOffRadius: 70, cornerRadius: 40, color: [72, 112, 86] },
+  traits: {
+    wall: { bCoef: 1, cMask: ['ball'], vis: true, color: 'cfe8d4' },
+    softWall: { trait: 'wall', bCoef: 0.4 },          // trait que hereda de otro trait
+    net: { trait: 'softWall', color: 'f5f0e0' },
+    post: { radius: 7, invMass: 0, color: 'ffd166' },
+  },
+  vertexes: [
+    { x: -400, y: -190 }, { x: 400, y: -190 }, { x: 400, y: 190 }, { x: -400, y: 190 }, // 0-3 esquinas
+    { x: -400, y: -60 }, { x: -400, y: 60 }, { x: 400, y: -60 }, { x: 400, y: 60 },      // 4-7 bocas de arco
+    { x: -440, y: -60 }, { x: -440, y: 60 }, { x: 440, y: -60 }, { x: 440, y: 60 },      // 8-11 fondo de red
+  ],
+  segments: [
+    { v0: 0, v1: 1, trait: 'wall', curve: 12 },   // techo apenas curvo
+    { v0: 2, v1: 3, trait: 'wall', curve: 12 },   // piso apenas curvo
+    { v0: 0, v1: 4, trait: 'wall' }, { v0: 5, v1: 3, trait: 'wall' },
+    { v0: 1, v1: 6, trait: 'wall' }, { v0: 7, v1: 2, trait: 'wall' },
+    { v0: 4, v1: 8, trait: 'net' }, { v0: 8, v1: 9, trait: 'net', curve: -60 }, { v0: 9, v1: 5, trait: 'net' },
+    { v0: 6, v1: 10, trait: 'net' }, { v0: 10, v1: 11, trait: 'net', curve: 60 }, { v0: 11, v1: 7, trait: 'net' },
+  ],
+  goals: [
+    { p0: [-405, -55], p1: [-405, 55], team: 'red' },
+    { p0: [405, -55], p1: [405, 55], team: 'blue' },
+  ],
+  discs: [
+    { pos: [-400, -60], trait: 'post' }, { pos: [-400, 60], trait: 'post' },
+    { pos: [400, -60], trait: 'post' }, { pos: [400, 60], trait: 'post' },
+    // Péndulo: ancla fija + bola pesada con gravedad, unidas por una varilla rígida.
+    { pos: [0, -190], radius: 4, invMass: 0, color: '888888', cMask: [] },
+    { pos: [60, -110], radius: 14, invMass: 0.3, damping: 0.999, gravity: [0, 0.06], color: 'ef476f', cGroup: ['ball'], cMask: ['ball', 'red', 'blue'] },
+    // Dos obstáculos unidos por un resorte.
+    { pos: [-150, 120], radius: 12, invMass: 0.5, color: '06d6a0', damping: 0.97 },
+    { pos: [-90, 120], radius: 12, invMass: 0.5, color: '06d6a0', damping: 0.97 },
+    // Disco que rebota solo de pared a pared (sin rozamiento).
+    { pos: [150, 120], speed: [2.2, 0], radius: 10, invMass: 0.05, damping: 1, bCoef: 1, color: '118ab2' },
+  ],
+  joints: [
+    { d0: 5, d1: 6, length: null, strength: 'rigid', color: '666666' },     // índices +1: la pelota es el disco 0
+    { d0: 7, d1: 8, length: [50, 80], strength: 0.05, color: '06d6a0' },
+  ],
+  planes: [
+    { normal: [0, 1], dist: -230, bCoef: 0.1, cMask: ['red', 'blue'] },
+    { normal: [0, -1], dist: -230, bCoef: 0.1, cMask: ['red', 'blue'] },
+    { normal: [1, 0], dist: -470, bCoef: 0.1, cMask: ['red', 'blue'] },
+    { normal: [-1, 0], dist: -470, bCoef: 0.1, cMask: ['red', 'blue'] },
+  ],
+  ballPhysics: { radius: 9, bCoef: 0.6, invMass: 1.2, damping: 0.99, color: 'ffffff' },
+  playerPhysics: { kickStrength: 5.5, },
+}
+`;

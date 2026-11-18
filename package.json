@@ -1,0 +1,27 @@
+{
+  "name": "haxbort",
+  "version": "1.0.0",
+  "description": "HaxBort: fútbol 2D de discos multijugador en el navegador, con salas por código, conexión directa entre jugadores y estadios .hbs.",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node scripts/build-client.mjs && node --watch server/index.js",
+    "build": "node scripts/build-client.mjs",
+    "test": "vitest run",
+    "test:maps": "node scripts/test-maps.mjs",
+    "e2e": "node scripts/e2e.mjs",
+    "maps:builtin": "node scripts/gen-builtin.mjs"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "vitest": "^3.2.4"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.23.0"
+  },
+  "main": "server/index.js"
+}
