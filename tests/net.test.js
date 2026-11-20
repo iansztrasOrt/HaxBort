@@ -285,3 +285,55 @@ describe('reglas y cupo', () => {
     expect(room.addMember({ name: 'J8' }).error).toBe('full');
   });
 });
+
+describe('radio de la pelota', () => {
+  const ballR = (room) => room.match.world.discs.find((d) => d.kind === 'ball').r;
+  it('el admin lo elige de 3 a 10; se mantiene en el saque, después de un gol y al cambiar de estadio', () => {
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'Admin' }).id;
+    const mapR = room.stadium.discs[0].radius;
+    expect(ballR(room)).toBe(mapR);
+    expect(room.handle(a, { t: 'rules', ball: 9 })).toBe(true);
+    expect(room.settings.ballRadius).toBe(9);
+    expect(ballR(room)).toBe(9);
+    expect(room.state().settings.ballRadius).toBe(9);
+    room.moveTo(a, 'red');
+    room.start();
+    expect(ballR(room)).toBe(9);
+    // gol → nuevo saque: la pelota sigue con radio 9
+    const m = room.match;
+    m.phase = 'playing';
+    const ball = m.world.discs[0];
+    ball.x = room.stadium.goals.find((g) => g.team === 'blue').p0[0] - 2;
+    ball.y = 0;
+    ball.vx = 8;
+    for (let i = 0; i < 400 && m.phase !== 'kickoff'; i += 1) room.step();
+    expect(m.score.red).toBe(1);
+    expect(ballR(room)).toBe(9);
+    room.handle(a, { t: 'stop' });
+    room.handle(a, { t: 'chat', text: '/mapa grande' });
+    expect(ballR(room)).toBe(9);
+    room.handle(a, { t: 'chat', text: '/pelota 3' });
+    expect(ballR(room)).toBe(3);
+    room.handle(a, { t: 'chat', text: '/pelota default' });
+    expect(room.settings.ballRadius).toBe(null);
+    expect(ballR(room)).toBe(room.stadium.discs[0].radius);
+  });
+
+  it('rechaza valores fuera de rango y no deja cambiarlo a otros ni con el partido en juego', () => {
+    const { room, sent } = fakeRoom();
+    const a = room.addMember({ name: 'Admin' }).id;
+    const b = room.addMember({ name: 'Otro' }).id;
+    for (const bad of [2, 11, 7.5, 'x', -1]) {
+      room.handle(a, { t: 'rules', ball: bad });
+      expect(room.settings.ballRadius).toBe(null);
+    }
+    expect([...sent].reverse().find((s) => s.id === a && s.msg.t === 'sys').msg.text).toMatch(/entre 3 y 10/);
+    room.handle(b, { t: 'rules', ball: 6 });
+    expect(room.settings.ballRadius).toBe(null);
+    room.moveTo(a, 'red');
+    room.start();
+    room.handle(a, { t: 'rules', ball: 6 });
+    expect(room.settings.ballRadius).toBe(null);
+  });
+});

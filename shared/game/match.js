@@ -16,6 +16,12 @@ export const TEAM_COLORS = Object.freeze({ red: '#e5574a', blue: '#3f7be0' });
  * @param {object} stadium normalizado (loadStadium)
  * @param {object} opts { timeLimit: minutos (0 = sin), scoreLimit (0 = sin), kickCooldown: ticks entre patadas }
  */
+/** El mismo estadio con otro radio de pelota (la pelota siempre es el disco 0). Sin `r`, igual. */
+export function withBallRadius(stadium, r) {
+  if (!r || !stadium.discs.length || stadium.discs[0].radius === r) return stadium;
+  return { ...stadium, discs: stadium.discs.map((d, i) => (i === 0 ? { ...d, radius: r } : d)) };
+}
+
 export function createMatch(stadium, opts = {}) {
   const m = {
     stadium,
