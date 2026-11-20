@@ -133,7 +133,7 @@ function field(o) {
 }
 
 const MAPS = [
-  field({ id: 'clasica', name: 'Clásica', w: 380, h: 175, goal: 64 }),
+  field({ id: 'clasica', name: 'Clásica', w: 380, h: 175, goal: 64, ball: { radius: 8 } }),
   field({ id: 'facil', name: 'Fácil', w: 380, h: 175, goal: 90, barrier: false }),
   field({ id: 'chica', name: 'Chica', w: 280, h: 130, goal: 55, kickR: 60, depth: 35 }),
   field({ id: 'grande', name: 'Grande', w: 560, h: 260, goal: 80, kickR: 100 }),
