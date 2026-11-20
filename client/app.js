@@ -6,7 +6,7 @@ import { loadStadium } from '../shared/stadium/load.js';
 import { kickCheck, normalizeKick, KICK_REFERENCE } from '../shared/stadium/tune.js';
 import { createMatch, addPlayer, startMatch, tick, setInput, INPUT, formatClock, TEAM_COLORS } from '../shared/game/match.js';
 import { botInput } from '../shared/game/bot.js';
-import { createWorld } from '../shared/physics/world.js';
+import { createWorld, step as physicsStep } from '../shared/physics/world.js';
 import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
 import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protocol.js';
 import { createRenderer } from './render.js';
@@ -16,7 +16,22 @@ import { Hub, ServerSession, HostSession, GuestSession, LocalSession } from './n
 const $ = (id) => document.getElementById(id);
 const STEP_MS = 1000 / 60;
 const TEAM_ES = { red: 'Rojo', blue: 'Azul', spectator: 'Espectadores' };
-const K = { profile: 'haxbort.profile.v1', prefs: 'haxbort.prefs.v1', library: 'haxbort.library.v1', session: 'haxbort.session.v1' };
+const K = { profile: 'haxbort.profile.v1', prefs: 'haxbort.prefs.v1', library: 'haxbort.library.v1', session: 'haxbort.session.v1', client: 'haxbort.client.v1' };
+const randomToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+// Identifica a esta pestaña ante la sala: si un pedido para entrar se repite (doble clic, reintento
+// después de un error, recarga), la sala devuelve el mismo jugador en vez de crear "Juan 2".
+const CLIENT_ID = (() => {
+  try {
+    let id = sessionStorage.getItem(K.client);
+    if (!id) {
+      id = randomToken();
+      sessionStorage.setItem(K.client, id);
+    }
+    return id;
+  } catch {
+    return randomToken();
+  }
+})();
 
 // ---------------------------------------------------------------- utilidades
 function el(tag, attrs = {}, ...kids) {
@@ -61,7 +76,9 @@ function toast(msg, ms = 3200) {
   toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-const prefs = { zoom: 1, sound: true, ...readJSON(localStorage, K.prefs, {}) };
+const EXTRAP = { min: -200, max: 200, def: 0 }; // ms, solo afecta cómo se dibuja en esta pantalla
+const prefs = { zoom: 1, sound: true, extrapolation: EXTRAP.def, ...readJSON(localStorage, K.prefs, {}) };
+if (!Number.isInteger(prefs.extrapolation) || prefs.extrapolation < EXTRAP.min || prefs.extrapolation > EXTRAP.max) prefs.extrapolation = EXTRAP.def;
 const savePrefs = () => writeJSON(localStorage, K.prefs, prefs);
 let profile = { name: '', avatar: '', ...readJSON(localStorage, K.profile, {}) };
 let library = readJSON(localStorage, K.library, []);
@@ -199,7 +216,36 @@ function setServerState() {
   const online = app.serverOk;
   box.append(el('span', { class: `dot ${online ? 'live' : ''}`, style: 'display:inline-block;margin-right:6px' }),
     online ? 'Conectado al servidor' : (/^https?:$/.test(location.protocol) ? 'Sin conexión con el servidor' : 'Vista previa sin servidor: podés practicar contra bots'));
-  for (const b of document.querySelectorAll('#create-form button[type=submit], #join-form button[type=submit]')) b.disabled = !online;
+  for (const b of document.querySelectorAll('#create-form button[type=submit], #join-form button[type=submit]')) b.disabled = !online || Boolean(entering);
+}
+
+// ---- un solo pedido de entrada (crear / unirse) a la vez
+let entering = null; // promesa del pedido en curso
+function setEntering(label) {
+  const busy = Boolean(label);
+  const joinBtn = $('join-form').querySelector('button[type=submit]');
+  const createBtn = $('create-form').querySelector('button[type=submit]');
+  joinBtn.dataset.label ||= joinBtn.textContent;
+  createBtn.dataset.label ||= createBtn.textContent;
+  joinBtn.textContent = label === 'join' ? 'Entrando…' : joinBtn.dataset.label;
+  createBtn.textContent = label === 'create' ? 'Creando…' : createBtn.dataset.label;
+  for (const b of [joinBtn, createBtn]) b.disabled = busy || !app.serverOk;
+  for (const r of document.querySelectorAll('#rooms-list .room-row')) r.disabled = busy;
+  $('rooms-list').setAttribute('aria-busy', String(busy));
+}
+/** Corre `fn` como único pedido de entrada; si ya hay uno en curso, devuelve ese. */
+function exclusiveEntry(kind, fn) {
+  if (entering) return entering;
+  setEntering(kind);
+  entering = (async () => {
+    try {
+      return await fn();
+    } finally {
+      entering = null;
+      setEntering(null);
+    }
+  })();
+  return entering;
 }
 
 let roomsTimer = 0;
@@ -216,8 +262,9 @@ async function refreshRooms() {
     if (!res.rooms.length) list.append(el('p', { class: 'small muted', text: 'No hay salas públicas ahora. ¡Creá una!' }));
     for (const r of res.rooms) {
       list.append(el('button', {
-        type: 'button', class: 'room-row',
+        type: 'button', class: 'room-row', disabled: Boolean(entering),
         onclick: () => {
+          if (entering) return;
           $('join-code').value = r.code;
           $('join-pass-field').hidden = !r.hasPassword;
           if (r.hasPassword) $('join-pass').focus();
@@ -245,6 +292,7 @@ function resetGameState() {
   app.prevBits = [0, 0];
   app.paused = false;
   app.offsets = new Map();
+  app.hist = [];
   app.lastPhase = 'idle';
   chat.length = 0;
   renderChat();
@@ -259,11 +307,22 @@ function attach(sess) {
   };
 }
 
-async function createRoom(e) {
+function createRoom(e) {
   e.preventDefault();
+  return exclusiveEntry('create', () => doCreateRoom());
+}
+
+async function doCreateRoom() {
+  // Máximo de personas en toda la sala (los equipos no tienen tope propio).
+  const max = Number($('room-max').value);
+  if (!Number.isInteger(max) || max < 2 || max > 30) {
+    toast('Máximo de personas: escribí un número entero de 2 a 30.', 3500);
+    $('room-max').focus();
+    return;
+  }
   const cfg = {
     name: $('room-name').value.trim() || `Sala de ${profile.name}`, password: $('room-pass').value.trim(),
-    maxPlayers: Number($('room-max').value), isPublic: $('room-public').checked,
+    maxPlayers: max, isPublic: $('room-public').checked,
   };
   const mode = $('room-mode').value;
   try {
@@ -272,7 +331,7 @@ async function createRoom(e) {
     if (mode === 'server') {
       const s = new ServerSession(hub);
       attach(s);
-      await s.start({ t: 'create', mode: 'server', room: cfg, name: profile.name, avatar: profile.avatar });
+      await s.start({ t: 'create', mode: 'server', room: cfg, name: profile.name, avatar: profile.avatar, clientId: CLIENT_ID });
     } else {
       const wait = hub.wait(['hosted']);
       hub.send({ t: 'create', mode: 'p2p', room: cfg, name: profile.name, avatar: profile.avatar });
@@ -285,7 +344,32 @@ async function createRoom(e) {
   }
 }
 
-async function joinRoom(code, { password = '', resume = null } = {}) {
+/** Entrar a una sala (o volver a la propia con `resume`). Es idempotente: mientras hay un pedido
+ *  en curso los demás clics no mandan nada, cada pedido lleva un `rid` para no mezclar respuestas
+ *  viejas con nuevas, y el `clientId` de la pestaña hace que la sala devuelva el mismo jugador si
+ *  el pedido llega dos veces. Si algo falla, todo vuelve a quedar habilitado para reintentar. */
+function joinRoom(code, opts = {}) {
+  return exclusiveEntry('join', () => doJoinRoom(code, opts));
+}
+
+/** Si la respuesta a un pedido llega después de haberlo dado por perdido, se deshace. */
+function discardLateAnswer(hub, rid) {
+  const offs = [];
+  const stop = () => offs.forEach((f) => f());
+  offs.push(hub.on('p2p', (m) => {
+    if (m.rid !== rid) return;
+    stop();
+    hub.send({ t: 'unlink', link: m.link });
+  }));
+  offs.push(hub.on('welcome', (m) => {
+    if (m.rid !== rid) return;
+    stop();
+    if (app.sess?.kind !== 'server') hub.send({ t: 'leave' });
+  }));
+  setTimeout(stop, 30000);
+}
+
+async function doJoinRoom(code, { password = '', resume = null } = {}) {
   code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length < 4) {
     toast('Escribí el código de 5 letras de la sala.');
@@ -294,20 +378,24 @@ async function joinRoom(code, { password = '', resume = null } = {}) {
   }
   try {
     const hub = await ensureHub();
-    const wait = hub.wait(['p2p', 'welcome']);
+    const rid = randomToken().slice(0, 12);
+    const wait = hub.wait(['p2p', 'welcome'], 10000, (m) => m.rid === rid);
     let server = null;
     if (!resume || resume.mode === 'server') {
       // Puede ser una sala del servidor: preparo la sesión para no perder los primeros mensajes.
       server = new ServerSession(hub);
       server.onMessage = () => {};
     }
-    const msg = resume ? { t: 'resume', code, id: resume.id, secret: resume.secret } : { t: 'join', code, name: profile.name, avatar: profile.avatar, password };
+    const msg = resume
+      ? { t: 'resume', code, id: resume.id, secret: resume.secret, rid, clientId: CLIENT_ID }
+      : { t: 'join', code, name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID };
     hub.send(msg);
     let res;
     try {
       res = await wait;
     } catch (err) {
       server?.dispose();
+      if (err.code === 'timeout') discardLateAnswer(hub, rid);
       throw err;
     }
     if (res.t === 'welcome') {
@@ -319,28 +407,33 @@ async function joinRoom(code, { password = '', resume = null } = {}) {
     }
     server?.dispose();
     const g = new GuestSession(hub, res.code, res.link);
-    const mode = await g.open();
-    if (g.closed) throw new Error('El anfitrión cerró la sala.');
-    const welcome = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('El anfitrión no respondió.')), 10000);
-      g.onMessage = (m) => {
-        if (m?.t === 'welcome') {
-          clearTimeout(timer);
-          resolve(m);
-        } else if (m?.t === 'error') {
-          clearTimeout(timer);
-          reject(Object.assign(new Error(m.text), { code: m.code }));
-        }
-      };
-      g.onDown = (reason) => {
-        clearTimeout(timer);
-        reject(new Error(reason));
-      };
-    });
-    g.send(resume ? { t: 'resume', id: resume.id, secret: resume.secret } : { t: 'join', name: profile.name, avatar: profile.avatar, password });
     let w;
     try {
+      const mode = await g.open();
+      if (g.closed) throw new Error('El anfitrión cerró la sala.');
+      const welcome = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(Object.assign(new Error('El anfitrión no respondió. Probá de nuevo.'), { code: 'timeout' })), 10000);
+        // Un anfitrión con una versión anterior del juego no devuelve el rid: también vale.
+        const mine = (m) => !m.rid || m.rid === rid;
+        g.onMessage = (m) => {
+          if (m?.t === 'welcome' && mine(m)) {
+            clearTimeout(timer);
+            resolve(m);
+          } else if (m?.t === 'error' && mine(m)) {
+            clearTimeout(timer);
+            reject(Object.assign(new Error(m.text), { code: m.code }));
+          }
+        };
+        g.onDown = (reason) => {
+          clearTimeout(timer);
+          reject(new Error(reason));
+        };
+      });
+      g.send(resume
+        ? { t: 'resume', id: resume.id, secret: resume.secret, rid, clientId: CLIENT_ID }
+        : { t: 'join', name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID });
       w = await welcome;
+      w.viaRelay = mode === 'relay';
     } catch (err) {
       g.leave();
       throw err;
@@ -349,7 +442,7 @@ async function joinRoom(code, { password = '', resume = null } = {}) {
     attach(g);
     onNet(w);
     enterGame();
-    if (mode === 'relay') sysLine('No se pudo conectar directo con el anfitrión (red o firewall): vas por el servidor, con un poco más de ping.');
+    if (w.viaRelay) sysLine('No se pudo conectar directo con el anfitrión (red o firewall): vas por el servidor, con un poco más de ping.');
     return true;
   } catch (err) {
     if (err.code === 'password' || err.code === 'bad_password') {
@@ -357,7 +450,7 @@ async function joinRoom(code, { password = '', resume = null } = {}) {
       $('join-code').value = code;
       $('join-pass').focus();
     }
-    if (err.code === 'expired' && resume) return joinRoom(code);
+    if (err.code === 'expired' && resume) return doJoinRoom(code);
     if (!resume) toast(err.message === 'sin servidor' ? 'Para jugar online abrí HaxBort desde tu servidor.' : err.message || 'No se pudo entrar.');
     return false;
   }
@@ -568,6 +661,7 @@ function gameStep() {
   if (app.pending.length > 120) app.pending.shift();
   const m = app.match;
   if (app.paused || m.phase === 'idle') return;
+  recordHistory(m);
   setInput(m, app.me, bits);
   const evs = tick(m);
   if (evs.some((e) => e.type === 'kick' && e.playerId === app.me)) {
@@ -583,7 +677,8 @@ let fpsT = 0;
 let frames = 0;
 let fpsShown = 0;
 function loop(now) {
-  acc += Math.min(250, now - last);
+  const dt = Math.min(250, now - last);
+  acc += dt;
   last = now;
   let steps = 0;
   while (acc >= STEP_MS && steps < 6) {
@@ -592,10 +687,11 @@ function loop(now) {
     acc -= STEP_MS;
     steps += 1;
   }
+  if (acc >= STEP_MS) acc %= STEP_MS; // la pestaña estuvo trabada: no arrastrar atraso
   if (app.screen === 'game' && app.match) {
-    drawWithOffsets(app.match);
+    drawWithOffsets(app.match, dt, acc / STEP_MS);
     updateHud();
-  } else if (demo) renderer.render(demo, { zoom: 1 });
+  } else if (demo) renderer.render(demo, { zoom: 1, dt });
   frames += 1;
   if (now - fpsT > 1000) {
     fpsShown = frames;
@@ -609,29 +705,141 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-function drawWithOffsets(m) {
+// ---- dibujo entre ticks y /extrapolation
+// La simulación avanza en ticks fijos de 1/60 s, pero la pantalla puede refrescar a 60, 75, 144…
+// Hz y nunca en el mismo instante que el tick. Para que el movimiento se vea parejo, cada cuadro
+// dibuja la cancha en el instante real: el estado del último tick + la fracción de tick que ya
+// pasó (`alpha`), más la extrapolación que haya elegido el jugador (/extrapolation, en ms).
+//   > 0: se dibuja más adelante, simulando la física hacia adelante en una COPIA de los discos.
+//   < 0: se dibuja un poco en el pasado, interpolando entre ticks guardados (más suave, más demora).
+// Nada de esto toca el partido real ni lo que simula el servidor: solo el dibujo.
+const HIST_MAX = Math.ceil(-EXTRAP.min / STEP_MS) + 2;
+function recordHistory(m) {
+  const frame = new Map();
+  m.world.discs.forEach((d, i) => frame.set(discKey(d, i), [d.x, d.y]));
+  app.hist.push(frame);
+  if (app.hist.length > HIST_MAX) app.hist.shift();
+}
+
+/** Corrimiento [dx, dy] de cada disco (por índice) para dibujarlo `ahead` ticks después del estado actual. */
+function viewShift(m, ahead) {
   const discs = m.world.discs;
+  if (Math.abs(ahead) < 1e-3 || app.paused || m.phase === 'idle' || m.phase === 'ended') return null;
+  if (ahead > 0) {
+    const ghost = { ...m.world, discs: discs.map((d) => ({ ...d })) };
+    const whole = Math.ceil(ahead);
+    let prev = null;
+    for (let k = 0; k < whole; k += 1) {
+      prev = ghost.discs.map((d) => [d.x, d.y]);
+      physicsStep(ghost);
+    }
+    const f = ahead - (whole - 1);
+    return discs.map((d, i) => {
+      const g = ghost.discs[i];
+      const x = prev[i][0] + (g.x - prev[i][0]) * f;
+      const y = prev[i][1] + (g.y - prev[i][1]) * f;
+      return [x - d.x, y - d.y];
+    });
+  }
+  const back = Math.min(-ahead, app.hist.length);
+  if (back <= 0) return null;
+  const i0 = Math.floor(back);
+  const f = back - i0;
+  const h = app.hist;
+  const at = (n, key, d) => (n === 0 ? [d.x, d.y] : h[h.length - n]?.get(key) || null);
+  return discs.map((d, i) => {
+    const key = discKey(d, i);
+    const a = at(i0, key, d);
+    const b = f > 0 ? at(i0 + 1, key, d) : a;
+    if (!a || !b) return [0, 0];
+    // Un salto grande (saque, gol, cambio de lugar) no se interpola: se ve el estado nuevo.
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 50 || Math.hypot(a[0] - d.x, a[1] - d.y) > 200) return [0, 0];
+    return [a[0] + (b[0] - a[0]) * f - d.x, a[1] + (b[1] - a[1]) * f - d.y];
+  });
+}
+
+function drawWithOffsets(m, dt = STEP_MS, alpha = 0) {
+  const discs = m.world.discs;
+  const shift = viewShift(m, alpha + prefs.extrapolation / STEP_MS);
+  // Las correcciones de la red se disuelven en el tiempo (no por cuadro): igual a 60 que a 144 Hz.
+  const decay = 0.8 ** (dt / STEP_MS);
   const applied = [];
   discs.forEach((d, i) => {
     const key = discKey(d, i);
     const o = app.offsets.get(key);
-    if (!o) return;
-    o[0] *= 0.8;
-    o[1] *= 0.8;
-    if (Math.abs(o[0]) + Math.abs(o[1]) < 0.05) {
-      app.offsets.delete(key);
-      return;
+    let ox = 0;
+    let oy = 0;
+    if (o) {
+      o[0] *= decay;
+      o[1] *= decay;
+      if (Math.abs(o[0]) + Math.abs(o[1]) < 0.05) app.offsets.delete(key);
+      else {
+        ox = o[0];
+        oy = o[1];
+      }
     }
-    d.x += o[0];
-    d.y += o[1];
-    applied.push([d, o]);
+    if (shift) {
+      ox += shift[i][0];
+      oy += shift[i][1];
+    }
+    if (!ox && !oy) return;
+    d.x += ox;
+    d.y += oy;
+    applied.push([d, ox, oy]);
   });
   const mine = m.players.find((p) => p.id === app.me);
-  renderer.render(m, { focusId: mine && mine.team !== 'spectator' ? app.me : null, zoom: prefs.zoom });
-  for (const [d, o] of applied) {
-    d.x -= o[0];
-    d.y -= o[1];
+  try {
+    renderer.render(m, { focusId: mine && mine.team !== 'spectator' ? app.me : null, zoom: prefs.zoom, dt });
+  } finally {
+    for (const [d, ox, oy] of applied) {
+      d.x -= ox;
+      d.y -= oy;
+    }
   }
+}
+
+/** Tiempo y goles escritos a mano por el admin: se validan acá (para avisar enseguida) y en la sala. */
+function submitRules(inp) {
+  const raw = inp.value.trim().replace(',', '.');
+  const isTime = inp.id === 'time-input';
+  const n = Number(raw);
+  const ok = raw !== '' && Number.isFinite(n) && n >= 0 && (isTime ? n <= 60 && Number.isInteger(n * 2) : n <= 99 && Number.isInteger(n));
+  if (!ok) {
+    inp.classList.add('bad');
+    toast(isTime ? 'Tiempo: escribí minutos de 0 a 60 (se puede medio minuto, ej. 7,5). 0 = sin límite.' : 'Goles: escribí un número entero de 0 a 99. 0 = sin límite.', 3500);
+    inp.value = inp.dataset.current || inp.value;
+    setTimeout(() => inp.classList.remove('bad'), 1500);
+    return;
+  }
+  inp.classList.remove('bad');
+  // Solo se manda el valor que cambió: si el admin cambia los dos seguido, uno no pisa al otro.
+  act(isTime ? { t: 'rules', time: n } : { t: 'rules', score: n });
+}
+
+/** /extrapolation [ms | default]: ver o cambiar la extrapolación de ESTA pantalla. */
+function extrapolationCommand(arg) {
+  const range = `entre ${EXTRAP.min} y ${EXTRAP.max} ms`;
+  if (!arg) {
+    sysLine(`Extrapolación: ${prefs.extrapolation} ms${prefs.extrapolation === EXTRAP.def ? ' (por defecto)' : ''}. Cambiala con /extrapolation N (${range}) o volvé al valor por defecto con /extrapolation default.`);
+    return;
+  }
+  let v;
+  if (['default', 'defecto', 'reset', 'normal'].includes(norm(arg))) v = EXTRAP.def;
+  else {
+    const txt = arg.replace(/ms$/i, '').trim();
+    if (!/^[-+]?\d+$/.test(txt)) {
+      sysLine(`"${arg}" no es un número válido. Usá un número entero ${range}, o "default".`);
+      return;
+    }
+    v = Number(txt);
+    if (v < EXTRAP.min || v > EXTRAP.max) {
+      sysLine(`${v} ms está fuera de rango: tiene que estar ${range}.`);
+      return;
+    }
+  }
+  prefs.extrapolation = v;
+  savePrefs();
+  sysLine(`Extrapolación puesta en ${v} ms${v === EXTRAP.def ? ' (valor por defecto)' : ''}. Solo cambia cómo ves el juego vos; la física del partido no cambia.`);
 }
 
 function updateHud() {
@@ -770,11 +978,15 @@ function renderRoom() {
   }
 
   const idle = r.phase === 'idle';
-  for (const [id, v] of [['time-select', r.settings.timeLimit], ['score-select', r.settings.scoreLimit]]) {
-    const sel = $(id);
-    if (![...sel.options].some((o) => Number(o.value) === v)) sel.append(el('option', { value: String(v), text: String(v) }));
-    sel.value = String(v);
-    sel.disabled = !admin || !idle;
+  for (const [id, v] of [['time-input', r.settings.timeLimit], ['score-input', r.settings.scoreLimit]]) {
+    const inp = $(id);
+    inp.dataset.current = String(v);
+    // No pisar lo que el admin está escribiendo.
+    if (document.activeElement !== inp) {
+      inp.value = String(v);
+      inp.classList.remove('bad');
+    }
+    inp.disabled = !admin || !idle;
   }
   $('stadium-name').textContent = `${r.map.name}${r.map.tuned ? ' · patada ajustada' : ''}`;
   $('btn-pick').textContent = admin && idle ? 'Elegir' : 'Ver';
@@ -895,6 +1107,7 @@ function submitChat(e) {
   if (text) {
     const c = norm(text.split(/\s+/)[0]);
     if (c === '/zoom') setZoom(Number(text.split(/\s+/)[1]) || 1);
+    else if (c === '/extrapolation' || c === '/extrapolacion') extrapolationCommand(text.split(/\s+/).slice(1).join(' '));
     else if (c === '/limpiar' || c === '/clear') {
       chat.length = 0;
       renderChat();
@@ -1278,8 +1491,19 @@ function bind() {
   $('btn-pause').addEventListener('click', () => act({ t: 'pause' }));
   $('btn-stop').addEventListener('click', () => act({ t: 'stop' }));
   $('btn-pick').addEventListener('click', () => openMaps('pick'));
-  for (const id of ['time-select', 'score-select']) {
-    $(id).addEventListener('change', () => act({ t: 'rules', time: Number($('time-select').value), score: Number($('score-select').value) }));
+  for (const id of ['time-input', 'score-input']) {
+    const inp = $(id);
+    inp.addEventListener('change', () => submitRules(inp));
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        inp.blur();
+      } else if (e.key === 'Escape') {
+        inp.value = inp.dataset.current || inp.value;
+        inp.classList.remove('bad');
+        inp.blur();
+      }
+    });
   }
 
   for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => selectTab(b.dataset.tab));
@@ -1323,7 +1547,30 @@ function bind() {
   });
 }
 
+/** Cartelito de versión: compara la versión de esta página con la que sirve el servidor ahora. */
+async function checkVersion() {
+  const tag = $('version-tag');
+  const mine = document.querySelector('meta[name="haxbort-build"]')?.content || '';
+  if (!mine || mine.startsWith('__')) return;
+  tag.textContent = `versión ${mine}`;
+  tag.hidden = false;
+  if (!/^https?:$/.test(location.protocol)) return;
+  try {
+    const res = await fetch('/api/version', { cache: 'no-store' });
+    const { build } = await res.json();
+    if (build === mine) {
+      tag.textContent = `✓ Última versión · ${mine}`;
+      tag.className = 'version-tag ok';
+    } else if (build) {
+      tag.textContent = '⟳ Hay una versión nueva: tocá para actualizar';
+      tag.className = 'version-tag old';
+      tag.onclick = () => location.reload();
+    }
+  } catch { /* sin servidor: queda solo el número */ }
+}
+
 async function init() {
+  checkVersion();
   bind();
   setupTouch();
   setZoom(prefs.zoom, true);

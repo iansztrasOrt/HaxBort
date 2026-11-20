@@ -157,17 +157,52 @@ describe('sala', () => {
     expect(sent.some((s) => s.msg.t === 'ev' && s.msg.events.some((e) => e.type === 'goal'))).toBe(true);
   });
 
-  it('cola de entradas: si se juntan, salta a la más nueva sin perder la patada', () => {
+  it('cola de entradas: un pico de jitter se consume de a una (sin descartar nada)', () => {
     const { room } = fakeRoom();
     const a = room.addMember({ name: 'A' }).id;
     const m = room.members.get(a);
     room.input(a, [{ seq: 1, bits: INPUT.kick }, { seq: 2, bits: 0 }, { seq: 3, bits: 0 }, { seq: 4, bits: INPUT.up }]);
-    room.consumeInput(m);
-    expect(m.lastSeq).toBe(3);
-    expect(m.bits & INPUT.kick).toBe(INPUT.kick);
-    room.consumeInput(m);
+    for (const [seq, bits] of [[1, INPUT.kick], [2, 0], [3, 0], [4, INPUT.up]]) {
+      room.consumeInput(m);
+      expect(m.lastSeq).toBe(seq);
+      expect(m.bits).toBe(bits);
+    }
+    room.consumeInput(m); // cola vacía: repite la última
     expect(m.lastSeq).toBe(4);
     expect(m.bits).toBe(INPUT.up);
+  });
+
+  it('cola de entradas: la demora que sobra de forma sostenida se recorta sin perder la patada', () => {
+    for (let kickAt = 20; kickAt < 40; kickAt += 1) {
+      const { room } = fakeRoom();
+      const a = room.addMember({ name: 'A' }).id;
+      const m = room.members.get(a);
+      let seq = 0;
+      room.input(a, [1, 2, 3].map(() => ({ seq: ++seq, bits: 0 })));
+      let skipped = 0;
+      let kicks = 0;
+      for (let t = 0; t < 120; t += 1) {
+        room.input(a, [{ seq: ++seq, bits: t === kickAt ? INPUT.kick : 0 }]);
+        const before = m.lastSeq;
+        room.consumeInput(m);
+        if (m.lastSeq - before > 1) skipped += 1;
+        if (m.bits & INPUT.kick) kicks += 1;
+      }
+      expect(skipped).toBeGreaterThan(0);
+      expect(kicks).toBe(1);
+      expect(m.queue.length).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('cola de entradas: después de un corte largo se pone al día de golpe', () => {
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    const m = room.members.get(a);
+    const list = Array.from({ length: 25 }, (_, i) => ({ seq: i + 1, bits: i === 3 ? INPUT.kick : 0 }));
+    room.input(a, list);
+    room.consumeInput(m);
+    expect(m.queue.length).toBeLessThanOrEqual(2);
+    expect(m.bits & INPUT.kick).toBe(INPUT.kick);
   });
 
   it('desconectado: guarda el lugar y se puede volver con el secreto', () => {
@@ -177,5 +212,76 @@ describe('sala', () => {
     expect(room.resume(r.id, 'mal')).toBe(false);
     expect(room.resume(r.id, r.secret)).toBe(true);
     expect(room.members.get(r.id).connected).toBe(true);
+  });
+});
+
+describe('reglas y cupo', () => {
+  const admin = () => {
+    const { room, sent } = fakeRoom();
+    const a = room.addMember({ name: 'Admin' }).id;
+    return { room, sent, a };
+  };
+  const lastSys = (sent, id) => [...sent].reverse().find((s) => s.id === id && s.msg.t === 'sys')?.msg.text || '';
+
+  it('valores personalizados: 7 minutos y 13 goles', () => {
+    const { room, a } = admin();
+    expect(room.handle(a, { t: 'rules', time: 7, score: 13 })).toBe(true);
+    expect(room.settings).toMatchObject({ timeLimit: 7, scoreLimit: 13 });
+    expect(room.match.settings).toMatchObject({ timeLimit: 7, scoreLimit: 13 });
+    expect(room.state().settings).toMatchObject({ timeLimit: 7, scoreLimit: 13 });
+    room.handle(a, { t: 'chat', text: '/tiempo 7.5' });
+    expect(room.settings.timeLimit).toBe(7.5);
+    room.handle(a, { t: 'chat', text: '/goles 0' });
+    expect(room.settings.scoreLimit).toBe(0);
+  });
+
+  it('rechaza valores inválidos o absurdos y avisa, sin cambiar nada', () => {
+    const { room, sent, a } = admin();
+    for (const bad of [{ time: -1 }, { time: 61 }, { time: 'abc' }, { time: Infinity }, { score: 100 }, { score: 2.5 }, { score: -3 }, { score: 'x' }]) {
+      room.handle(a, { t: 'rules', ...bad });
+      expect(room.settings).toMatchObject({ timeLimit: 3, scoreLimit: 3 });
+      expect(lastSys(sent, a)).toMatch(/tiene que|tienen que/);
+    }
+  });
+
+  it('el partido termina al llegar al límite de goles personalizado', () => {
+    const { room, a } = admin();
+    room.handle(a, { t: 'rules', time: 0, score: 13 });
+    room.moveTo(a, 'red');
+    room.addBot('blue');
+    room.start();
+    const m = room.match;
+    m.score.red = 12;
+    const ball = m.world.discs[0];
+    m.phase = 'playing';
+    ball.x = room.stadium.goals.find((g) => g.team === 'blue').p0[0] - 2;
+    ball.y = 0;
+    ball.vx = 8;
+    for (let i = 0; i < 400 && m.phase !== 'ended'; i += 1) room.step();
+    expect(m.score.red).toBe(13);
+    expect(m.phase).toBe('ended');
+    expect(m.winner).toBe('red');
+  });
+
+  it('el reloj respeta el tiempo personalizado (7 min)', () => {
+    const { room, a } = admin();
+    room.handle(a, { t: 'rules', time: 7, score: 0 });
+    room.moveTo(a, 'red');
+    room.start();
+    const m = room.match;
+    m.phase = 'playing';
+    m.score.red = 1;
+    m.ticks = 7 * 60 * 60 - 2;
+    for (let i = 0; i < 5; i += 1) room.step();
+    expect(m.phase).toBe('ended');
+  });
+
+  it('sin tope por equipo: todos pueden ir al mismo equipo; el cupo es de la sala entera', () => {
+    const { room } = fakeRoom({ maxPlayers: 7 });
+    const ids = [];
+    for (let i = 0; i < 7; i += 1) ids.push(room.addMember({ name: `J${i}` }).id);
+    for (const id of ids) expect(room.moveTo(id, 'red')).toBe(true);
+    expect([...room.members.values()].filter((m) => m.team === 'red')).toHaveLength(7);
+    expect(room.addMember({ name: 'J8' }).error).toBe('full');
   });
 });

@@ -8,7 +8,8 @@
 // Extra: si un disco va más rápido que ~75% de su radio por tick, el paso se
 // divide en sub-pasos para que no atraviese paredes finas ni postes.
 
-export const MAX_SUBSTEPS = 8;
+// Sub-pasos para que ningún disco avance más de 0,75·radio por sub-paso (sin atravesar paredes).
+export const MAX_SUBSTEPS = 32;
 
 export function createWorld(stadium) {
   const vertexes = stadium.vertexes.map((v) => ({ ...v }));
@@ -38,7 +39,7 @@ export function createWorld(stadium) {
 
 export function makeDisc(d, kind = 'map') {
   return {
-    x: d.pos[0], y: d.pos[1], vx: d.speed[0], vy: d.speed[1], gx: d.gravity[0], gy: d.gravity[1],
+    x: d.pos[0], y: d.pos[1], vx: d.speed[0], vy: d.speed[1], ux: 0, uy: 0, px: 0, py: 0, gx: d.gravity[0], gy: d.gravity[1],
     r: d.radius, invMass: d.invMass, damping: d.damping, bCoef: d.bCoef,
     cMask: d.cMask, cGroup: d.cGroup, color: d.color, kind,
   };
@@ -288,23 +289,41 @@ export function substepsFor(world) {
   return Math.min(MAX_SUBSTEPS, n);
 }
 
-/** Avanza el mundo un tick (1/60 s). */
+/** Avanza el mundo un tick (1/60 s), con el orden de HaxBall: pos += v; v = (v + g)·damping;
+ *  colisiones; uniones. Con sub-pasos, el desplazamiento del tick (u = v al empezar) se reparte
+ *  en n partes iguales, así el disco recorre lo mismo sin importar cuántos sub-pasos haga; si una
+ *  colisión cambia su velocidad, el resto del tick avanza con la velocidad nueva (dirección del
+ *  rebote). Con n = 1 es exactamente el paso de HaxBall. */
 export function step(world) {
   const n = substepsFor(world);
   const { discs } = world;
+  const f = 1 / n;
+  for (const d of discs) {
+    d.ux = d.vx;
+    d.uy = d.vy;
+    d.vx = d.damping * (d.vx + d.gx);
+    d.vy = d.damping * (d.vy + d.gy);
+  }
   for (let s = 0; s < n; s += 1) {
-    const f = 1 / n;
     for (const d of discs) {
-      const vx = d.vx;
-      const vy = d.vy;
-      d.x += vx * f;
-      d.y += vy * f;
-      if (s === 0) {
-        d.vx = d.damping * (vx + d.gx);
-        d.vy = d.damping * (vy + d.gy);
-      }
+      d.x += d.ux * f;
+      d.y += d.uy * f;
+    }
+    if (n === 1) {
+      collideAll(world);
+      break;
+    }
+    for (const d of discs) {
+      d.px = d.vx;
+      d.py = d.vy;
     }
     collideAll(world);
+    for (const d of discs) {
+      if (d.vx !== d.px || d.vy !== d.py) {
+        d.ux = d.vx;
+        d.uy = d.vy;
+      }
+    }
   }
   for (let k = 0; k < 2; k += 1) for (const j of world.joints) solveJoint(j, discs);
 }

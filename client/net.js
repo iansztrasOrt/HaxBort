@@ -173,16 +173,18 @@ export class Hub {
     return () => this.handlers.get(type)?.delete(fn);
   }
 
-  /** Espera un mensaje de alguno de estos tipos (o error). */
-  wait(types, timeoutMs = 10000) {
+  /** Espera un mensaje de alguno de estos tipos (o error). Con `match`, sólo cuentan los
+   *  mensajes que cumplen la condición (p. ej. la respuesta a ESTE pedido y no a uno viejo). */
+  wait(types, timeoutMs = 10000, match = null) {
     return new Promise((resolve, reject) => {
       const offs = [];
       const timer = setTimeout(() => {
         offs.forEach((f) => f());
-        reject(new Error('timeout'));
+        reject(Object.assign(new Error('El servidor no respondió. Probá de nuevo.'), { code: 'timeout' }));
       }, timeoutMs);
       for (const t of [...types, 'error']) {
         offs.push(this.on(t, (msg) => {
+          if (match && !match(msg)) return;
           clearTimeout(timer);
           offs.forEach((f) => f());
           if (msg.t === 'error') reject(Object.assign(new Error(msg.text || 'error'), { code: msg.code }));
@@ -362,7 +364,7 @@ class HostLink {
   /** Mensaje del invitado. El camino por el que llega su "join" define por dónde le respondo. */
   receive(msg, via) {
     const room = this.host.room;
-    if (!room) return;
+    if (!room || this.mode === 'closed') return;
     if (msg instanceof ArrayBuffer) {
       if (this.memberId) {
         const list = decodeInput(msg);
@@ -378,21 +380,22 @@ class HostLink {
         this.pc.close();
         this.pc = null;
       }
+      const rid = typeof msg.rid === 'string' ? msg.rid.slice(0, 16) : undefined;
       if (msg.t === 'resume') {
         if (room.resume(String(msg.id), String(msg.secret))) {
-          this.attach(String(msg.id), true);
+          this.attach(String(msg.id), true, rid);
           return;
         }
-        this.send({ t: 'error', code: 'expired', text: 'Tu lugar en la sala ya no está guardado.' });
+        this.send({ t: 'error', code: 'expired', text: 'Tu lugar en la sala ya no está guardado.', rid });
         return;
       }
-      const res = room.addMember({ name: msg.name, avatar: msg.avatar, password: msg.password, ip: '' });
+      const res = room.addMember({ name: msg.name, avatar: msg.avatar, password: msg.password, ip: '', clientId: msg.clientId });
       if (!res.ok) {
         const text = { full: 'La sala está llena.', password: 'Esta sala tiene contraseña.', bad_password: 'La contraseña no es correcta.', banned: 'No podés entrar a esta sala.' }[res.error];
-        this.send({ t: 'error', code: res.error, text: text || 'No se pudo entrar.' });
+        this.send({ t: 'error', code: res.error, text: text || 'No se pudo entrar.', rid });
         return;
       }
-      this.attach(res.id, false);
+      this.attach(res.id, Boolean(res.rejoin), rid);
       return;
     }
     if (msg.t === 'pong') {
@@ -410,12 +413,20 @@ class HostLink {
     room.handle(this.memberId, msg);
   }
 
-  attach(memberId, rejoin) {
+  /** Asocia este canal al jugador. Si el mismo jugador ya tenía otro canal (pedido repetido o
+   *  reconexión), el viejo se cierra del todo: deja de mandar entradas y el servidor lo suelta. */
+  attach(memberId, rejoin, rid) {
     const old = this.host.byMember.get(memberId);
-    if (old && old !== this) old.close();
+    if (old && old !== this) {
+      old.memberId = null;
+      old.mode = 'closed';
+      this.host.links.delete(old.id);
+      this.host.hub.send({ t: 'unlink', link: old.id, reason: 'Entraste a la sala desde otra conexión.' });
+      old.close();
+    }
     this.memberId = memberId;
     this.host.byMember.set(memberId, this);
-    this.host.room.greet(memberId, { rejoin });
+    this.host.room.greet(memberId, { rejoin, rid });
   }
 
   send(msg) {

@@ -58,6 +58,11 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
     if (p === '/healthz') {
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('ok');
+    } else if (p === '/api/version') {
+      // La versión de la página que se está sirviendo ahora (la escribe el build en dist/index.html).
+      const build = /<meta name="haxbort-build" content="([^"]*)"/.exec(String(page()))?.[1] || '';
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ build }));
     } else if (p === '/api/salas') {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ rooms: publicList(), total: rooms.size }));
@@ -95,7 +100,7 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
     };
   }
 
-  function enterServerRoom(ws, entry, res, rejoin = false) {
+  function enterServerRoom(ws, entry, res, rejoin = false, rid = undefined) {
     const prev = entry.sockets.get(res.id);
     if (prev && prev !== ws) {
       send(prev, { t: 'kicked', reason: 'Abriste la sala en otra pestaña.' });
@@ -104,7 +109,7 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
     entry.sockets.set(res.id, ws);
     ws.ctx.code = entry.room.code;
     ws.ctx.id = res.id;
-    entry.room.greet(res.id, { rejoin });
+    entry.room.greet(res.id, { rejoin, rid });
   }
 
   function leaveCurrent(ws) {
@@ -197,13 +202,13 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
           const entry = { kind: 'server', sockets: new Map(), room: null };
           entry.room = new Room({ code, name: cfg.name, password: cfg.password, maxPlayers: cfg.maxPlayers, isPublic: cfg.isPublic !== false }, serverTransport(entry));
           rooms.set(code, entry);
-          const res = entry.room.addMember({ name: msg.name, avatar: msg.avatar, password: cfg.password, ip: ctx.ip });
+          const res = entry.room.addMember({ name: msg.name, avatar: msg.avatar, password: cfg.password, ip: ctx.ip, clientId: msg.clientId });
           enterServerRoom(ws, entry, res);
           log(`[sala] ${code} creada (servidor)`);
         } else {
           rooms.set(code, {
             kind: 'p2p', host: ws, links: new Set(), createdAt: Date.now(),
-            summary: { name: cleanText(cfg.name, 32) || 'Sala de HaxBort', players: 1, bots: 0, max: Number(cfg.maxPlayers) || 10, hasPassword: Boolean(cfg.password), map: 'Clásica', playing: false, isPublic: cfg.isPublic !== false },
+            summary: { name: cleanText(cfg.name, 32) || 'Sala de HaxBort', players: 1, bots: 0, max: Math.min(30, Math.max(2, Math.round(Number(cfg.maxPlayers)) || 10)), hasPassword: Boolean(cfg.password), map: 'Clásica', playing: false, isPublic: cfg.isPublic !== false },
           });
           ctx.code = code;
           ctx.hosting = code;
@@ -214,23 +219,28 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
       }
       case 'join':
       case 'resume': {
+        // rid: identificador del pedido; vuelve en la respuesta para que el cliente no confunda
+        // la respuesta de un pedido viejo (que tardó) con la del actual.
+        const rid = typeof msg.rid === 'string' ? msg.rid.slice(0, 16) : undefined;
+        const fail = (code, text) => send(ws, { t: 'error', code, text, rid });
         const code = cleanCode(msg.code);
         const e = rooms.get(code);
-        if (!e) return send(ws, { t: 'error', code: 'not_found', text: `No existe la sala ${code || ''}. Revisá el código.` });
+        if (!e) return fail('not_found', `No existe la sala ${code || ''}. Revisá el código.`);
         if (e.kind === 'p2p') {
-          if (e.host === ws) return;
+          if (e.host === ws) return fail('own_room', 'Ya estás en esta sala (sos el anfitrión).');
           const link = openLink(ws, code);
-          return send(ws, { t: 'p2p', code, link });
+          return send(ws, { t: 'p2p', code, link, rid });
         }
         if (msg.t === 'resume' && e.room.resume(String(msg.id), String(msg.secret))) {
-          leaveCurrent(ws);
-          return enterServerRoom(ws, e, { id: String(msg.id) }, true);
+          if (ctx.code !== code || ctx.id !== String(msg.id)) leaveCurrent(ws);
+          return enterServerRoom(ws, e, { id: String(msg.id) }, true, rid);
         }
-        if (msg.t === 'resume') return send(ws, { t: 'error', code: 'expired', text: 'Tu lugar en la sala ya no está guardado.' });
-        const res = e.room.addMember({ name: cleanName(msg.name), avatar: cleanAvatar(msg.avatar), password: msg.password, ip: ctx.ip });
-        if (!res.ok) return send(ws, { t: 'error', code: res.error, text: errorText(res.error) });
-        leaveCurrent(ws);
-        return enterServerRoom(ws, e, res);
+        if (msg.t === 'resume') return fail('expired', 'Tu lugar en la sala ya no está guardado.');
+        const res = e.room.addMember({ name: cleanName(msg.name), avatar: cleanAvatar(msg.avatar), password: msg.password, ip: ctx.ip, clientId: msg.clientId });
+        if (!res.ok) return fail(res.error, errorText(res.error));
+        // Si es el mismo jugador pidiendo entrar otra vez desde este mismo socket, no se lo saca de la sala.
+        if (ctx.code !== code || ctx.id !== res.id) leaveCurrent(ws);
+        return enterServerRoom(ws, e, res, Boolean(res.rejoin), rid);
       }
       case 'leave':
         leaveCurrent(ws);

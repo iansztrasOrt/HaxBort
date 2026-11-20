@@ -15,7 +15,14 @@ import { snapshotBody, withAck } from '../net/protocol.js';
 export const MAX_PLAYERS = 30;
 const END_DELAY_TICKS = Math.round(3.5 * TICK_RATE); // cartel de fin y vuelta a la sala
 const AWAY_GRACE_TICKS = 30 * TICK_RATE; // tiempo para reconectarse sin perder el lugar
-const QUEUE_SOFT = 2; // entradas en espera: más que esto se colapsa (menos demora)
+// Búfer de entradas (jitter buffer adaptativo). Se consume UNA entrada por tick, igual que la
+// predicción del cliente, para que el servidor simule exactamente lo mismo que predijo el jugador.
+// Si durante toda una ventana la cola nunca bajó de QUEUE_EXCESS, esa demora sobra: se salta una
+// entrada (conservando la patada) y la demora baja de a poco, sin descartar entradas por un pico
+// de jitter. QUEUE_HARD sólo actúa después de un corte largo (mucho atraso de golpe).
+const QUEUE_WINDOW = 30; // ticks (0,5 s)
+const QUEUE_EXCESS = 2;
+const QUEUE_HARD = 12;
 const HISTORY = 40;
 const TEAMS = ['red', 'blue', 'spectator'];
 const TEAM_ES = { red: 'Rojo', blue: 'Azul', spectator: 'Espectadores' };
@@ -28,6 +35,17 @@ export function cleanText(value, max) {
 }
 export const cleanName = (v) => cleanText(v, 20);
 export const cleanAvatar = (v) => cleanText(v, 2).replace(/\s/g, '');
+/** Límites del partido. Tiempo en minutos (0–60, de a medio minuto) y goles (0–99); 0 = sin límite. */
+export const RULE_LIMITS = { time: { min: 0, max: 60, step: 0.5 }, score: { min: 0, max: 99 } };
+export function validRules(msg, current) {
+  const time = msg.time === undefined ? current.timeLimit : Number(msg.time);
+  const score = msg.score === undefined ? current.scoreLimit : Number(msg.score);
+  const T = RULE_LIMITS.time;
+  const S = RULE_LIMITS.score;
+  if (!Number.isFinite(time) || time < T.min || time > T.max) return { error: `El tiempo tiene que ser entre ${T.min} y ${T.max} minutos (0 = sin límite).` };
+  if (!Number.isInteger(score) || score < S.min || score > S.max) return { error: `Los goles tienen que ser un número entero entre ${S.min} y ${S.max} (0 = sin límite).` };
+  return { time: Math.round(time / T.step) * T.step, score };
+}
 const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const randomId = () => Math.random().toString(36).slice(2, 10);
 const randomSecret = () => Array.from({ length: 4 }, randomId).join('');
@@ -37,7 +55,7 @@ export class Room {
     this.code = code;
     this.name = cleanText(name, 32) || 'Sala de HaxBort';
     this.password = cleanText(password, 20);
-    this.maxPlayers = Math.min(MAX_PLAYERS, Math.max(2, Number(maxPlayers) || 10));
+    this.maxPlayers = Math.min(MAX_PLAYERS, Math.max(2, Math.round(Number(maxPlayers)) || 10));
     this.isPublic = Boolean(isPublic);
     this.offline = offline;
     this.transport = transport;
@@ -66,9 +84,24 @@ export class Room {
     return this.members.size;
   }
 
-  /** Revisa contraseña, cupo y ban, y suma al jugador (como espectador). No manda nada todavía. */
-  addMember({ name, avatar, password = '', ip = '' }) {
+  /** Revisa contraseña, cupo y ban, y suma al jugador (como espectador). No manda nada todavía.
+   *  `clientId` identifica a la pestaña que pide entrar: si ya tiene un lugar en la sala (pedido
+   *  repetido, reintento después de un error de red, recarga), se le devuelve ESE lugar en vez de
+   *  crear otro jugador. Así una persona nunca aparece dos veces. */
+  addMember({ name, avatar, password = '', ip = '', clientId = '' }) {
     if (ip && this.banned.has(ip)) return { ok: false, error: 'banned' };
+    const cid = typeof clientId === 'string' ? clientId.slice(0, 40) : '';
+    if (cid) {
+      const same = [...this.members.values()].find((x) => !x.bot && x.clientId === cid);
+      if (same) {
+        same.connected = true;
+        same.awayTicks = 0;
+        same.queue = [];
+        this.dirty = true;
+        this.touch();
+        return { ok: true, id: same.id, secret: same.secret, member: same, rejoin: true };
+      }
+    }
     if (this.password && cleanText(password, 20) !== this.password) return { ok: false, error: password ? 'bad_password' : 'password' };
     if (this.members.size >= this.maxPlayers) {
       // Si hay bots, uno le deja el lugar a la persona.
@@ -82,7 +115,7 @@ export class Room {
     const m = {
       id: `p${++this.seq}${randomId().slice(0, 4)}`, secret: randomSecret(), name: nick, avatar: cleanAvatar(avatar) || nick.slice(0, 1).toUpperCase(),
       team: 'spectator', admin: !this.humans().length, bot: false, joinedAt: this.seq, connected: true, awayTicks: 0,
-      queue: [], lastSeq: 0, bits: 0, ping: null, ip, chatTimes: [],
+      queue: [], lastSeq: 0, bits: 0, ping: null, ip, chatTimes: [], clientId: cid,
     };
     this.members.set(m.id, m);
     addPlayer(this.match, { id: m.id, name: m.name, avatar: m.avatar, team: 'spectator' });
@@ -91,10 +124,10 @@ export class Room {
   }
 
   /** Primer envío a un jugador recién entrado (o reconectado). */
-  greet(id, { rejoin = false } = {}) {
+  greet(id, { rejoin = false, rid } = {}) {
     const m = this.members.get(id);
     if (!m) return;
-    this.send(id, { t: 'welcome', id, secret: m.secret, code: this.code, offline: this.offline });
+    this.send(id, { t: 'welcome', id, secret: m.secret, code: this.code, offline: this.offline, ...(rid ? { rid } : {}) });
     this.send(id, this.mapMessage());
     this.send(id, this.state());
     this.send(id, { t: 'history', items: this.history });
@@ -306,12 +339,23 @@ export class Room {
     if (m.queue.length > 30) m.queue.splice(0, m.queue.length - 30);
   }
 
-  /** Toma la entrada de este tick. Si se juntaron varias (la red las trajo de golpe),
-   *  salta a la más nueva para no arrastrar demora, sin perder una patada apretada. */
+  /** Toma la entrada de este tick (una por tick). La demora sobrante se recorta de a una entrada
+   *  y sólo si se mantuvo toda una ventana; nunca se pierde una patada apretada. */
   consumeInput(m) {
-    if (!m.queue.length) return;
+    const len = m.queue.length;
+    m.qMin = Math.min(m.qMin ?? len, len);
+    m.qTicks = (m.qTicks || 0) + 1;
+    let skip = 0;
+    if (len > QUEUE_HARD) skip = len - QUEUE_EXCESS;
+    else if (m.qTicks >= QUEUE_WINDOW) {
+      if (m.qMin >= QUEUE_EXCESS) skip = 1;
+      m.qTicks = 0;
+      m.qMin = Infinity;
+    }
+    if (skip) { m.qTicks = 0; m.qMin = Infinity; }
+    if (!len) return;
     let kick = false;
-    while (m.queue.length > QUEUE_SOFT) {
+    for (let i = 0; i < skip; i += 1) {
       const old = m.queue.shift();
       if (old.bits & INPUT.kick) kick = true;
     }
@@ -421,12 +465,15 @@ export class Room {
       case 'rules': {
         if (!admin) return deny();
         if (!idle) return this.tell(id, 'Pará el partido para cambiar las reglas.');
-        const time = Number(msg.time);
-        const score = Number(msg.score);
-        if (Number.isFinite(time) && time >= 0 && time <= 60) this.settings.timeLimit = Math.round(time * 2) / 2;
-        if (Number.isInteger(score) && score >= 0 && score <= 99) this.settings.scoreLimit = score;
-        this.match.settings.timeLimit = this.settings.timeLimit;
-        this.match.settings.scoreLimit = this.settings.scoreLimit;
+        const r = validRules(msg, this.settings);
+        if (r.error) return this.tell(id, r.error);
+        const fmtTime = (t) => (t ? `${String(t).replace('.', ',')} min` : 'sin límite');
+        if (r.time !== this.settings.timeLimit) this.sys(`Tiempo: ${fmtTime(r.time)}.`);
+        if (r.score !== this.settings.scoreLimit) this.sys(`Goles para ganar: ${r.score || 'sin límite'}.`);
+        this.settings.timeLimit = r.time;
+        this.settings.scoreLimit = r.score;
+        this.match.settings.timeLimit = r.time;
+        this.match.settings.scoreLimit = r.score;
         this.dirty = true;
         return true;
       }
@@ -550,7 +597,7 @@ export class Room {
         [
           '/avatar XX — tu avatar (1 o 2 caracteres)', '/rojo · /azul · /espectador — cambiarte de equipo',
           'Admin: /empezar · /parar · /pausa · /mezclar · /auto · /bloquear', 'Admin: /mapa nombre · /goles N · /tiempo N · /bot rojo|azul',
-          'Admin: /echar nombre · /ban nombre · /admin nombre · /clave texto (vacío = sin clave)', 'En tu pantalla: /zoom N · /limpiar',
+          'Admin: /echar nombre · /ban nombre · /admin nombre · /clave texto (vacío = sin clave)', 'En tu pantalla: /zoom N · /limpiar · /extrapolation [ms|default]',
         ].forEach((h) => this.tell(me.id, h, 'help'));
         return true;
       case 'avatar': return act({ t: 'avatar', text: arg });
@@ -575,13 +622,13 @@ export class Room {
       case 'goles': case 'score': {
         const n = Number(arg);
         if (!Number.isInteger(n)) return this.tell(me.id, 'Usá /goles N (0 = sin límite).');
-        if (act({ t: 'rules', score: n, time: this.settings.timeLimit }) && me.admin && this.match.phase === 'idle') this.sys(`Goles para ganar: ${n || 'sin límite'}.`);
+        act({ t: 'rules', score: n, time: this.settings.timeLimit });
         return true;
       }
       case 'tiempo': case 'time': {
         const n = Number(arg);
         if (!Number.isFinite(n)) return this.tell(me.id, 'Usá /tiempo N en minutos (0 = sin límite).');
-        if (act({ t: 'rules', time: n, score: this.settings.scoreLimit }) && me.admin && this.match.phase === 'idle') this.sys(`Tiempo: ${n ? `${n} min` : 'sin límite'}.`);
+        act({ t: 'rules', time: n, score: this.settings.scoreLimit });
         return true;
       }
       case 'echar': case 'kick': case 'ban': {

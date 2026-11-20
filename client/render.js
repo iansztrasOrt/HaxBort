@@ -46,7 +46,7 @@ export function createRenderer(canvas) {
    * zoom = 1 → se ve toda la cancha, centrada. zoom > 1 → más cerca y la cámara
    * sigue al jugador (y a la pelota, sin perder de vista al jugador).
    */
-  function updateCamera(m, focusDisc, zoom) {
+  function updateCamera(m, focusDisc, zoom, dt = 1000 / 60) {
     const st = m.stadium;
     const b = cameraBounds(st);
     const cw = canvas.width;
@@ -81,9 +81,11 @@ export function createRenderer(canvas) {
     // Suavizado de cámara y de zoom.
     const first = !cam.ready;
     cam.ready = true;
-    cam.x += (nx - cam.x) * (first ? 1 : 0.14);
-    cam.y += (ny - cam.y) * (first ? 1 : 0.14);
-    cam.s += (s - cam.s) * (first ? 1 : 0.2);
+    // Suavizado por tiempo (no por cuadro): la cámara se mueve igual a 60 que a 144 Hz.
+    const k = (base) => (first ? 1 : 1 - (1 - base) ** (dt * 0.06));
+    cam.x += (nx - cam.x) * k(0.14);
+    cam.y += (ny - cam.y) * k(0.14);
+    cam.s += (s - cam.s) * k(0.2);
   }
 
   function roundRect(x, y, w, h, r) {
@@ -174,10 +176,10 @@ export function createRenderer(canvas) {
     ctx.stroke();
   }
 
-  function render(m, { focusId = null, names = true, zoom = 1 } = {}) {
+  function render(m, { focusId = null, names = true, zoom = 1, dt = 1000 / 60 } = {}) {
     const dpr = resize();
     const focus = m.players.find((p) => p.id === focusId)?.disc || null;
-    updateCamera(m, focus, zoom);
+    updateCamera(m, focus, zoom, Math.min(100, Math.max(0, dt)));
     const { world, stadium } = m;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);

@@ -201,6 +201,48 @@ describe('colisiones', () => {
   });
 });
 
+describe('integración del paso (sub-pasos)', () => {
+  const world = (discs, segments = []) => ({ discs, segments, planes: [], vertexes: [], joints: [] });
+  const wall = (ax, ay, bx, by) => prepareSegment({ v0: 0, v1: 1, bias: 0, bCoef: 1, cMask: ALL, cGroup: ALL, curveF: null }, [{ x: ax, y: ay }, { x: bx, y: by }]);
+
+  it('vuelo libre: recorre v por tick y frena con damping, sin importar los sub-pasos', () => {
+    for (const v of [2, 7.4, 7.6, 15, 30, 120]) {
+      const d = disc({ vx: v, damping: 0.99 });
+      step(world([d]));
+      expect(d.x).toBeCloseTo(v, 9);
+      expect(d.vx).toBeCloseTo(v * 0.99, 9);
+    }
+  });
+
+  it('con un solo sub-paso es exactamente el orden de HaxBall (pos += v; v = (v+g)·damping)', () => {
+    const d = disc({ x: 1, y: 2, vx: 3, vy: -1, gx: 0.1, gy: 0.2, damping: 0.96 });
+    step(world([d]));
+    expect([d.x, d.y]).toEqual([4, 1]);
+    expect(d.vx).toBeCloseTo((3 + 0.1) * 0.96, 12);
+    expect(d.vy).toBeCloseTo((-1 + 0.2) * 0.96, 12);
+  });
+
+  it('rebote: ángulo de salida igual al de entrada y misma rapidez (bCoef 1), a cualquier velocidad', () => {
+    for (const v of [3, 7.6, 20, 60]) {
+      const d = disc({ x: 90 - v * 0.5, vx: v, vy: v, bCoef: 1, damping: 1 });
+      const w = world([d], [wall(100, -1e4, 100, 1e4)]);
+      for (let i = 0; i < 3; i += 1) step(w);
+      expect(Math.atan2(d.vy, d.vx) * 180 / Math.PI).toBeCloseTo(135, 6);
+      expect(Math.hypot(d.vx, d.vy)).toBeCloseTo(Math.hypot(v, v), 6);
+      expect(d.x).toBeLessThanOrEqual(90 + 1e-9);
+    }
+  });
+
+  it('a velocidad altísima no atraviesa una pared fina', () => {
+    for (const v of [40, 80, 160, 190]) {
+      const d = disc({ r: 6, vx: v, damping: 1 });
+      const w = world([d], [wall(50, -100, 50, 100)]);
+      for (let i = 0; i < 4; i += 1) step(w);
+      expect(d.x).toBeLessThan(50);
+    }
+  });
+});
+
 describe('partido', () => {
   function playRight(m, id, ticks) {
     const ev = [];
