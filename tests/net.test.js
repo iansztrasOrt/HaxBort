@@ -363,3 +363,18 @@ describe('flechitas de equipos y fila de espera', () => {
     expect(room.members.get(b).team).toBe('spectator');
   });
 });
+
+describe('fotos', () => {
+  it('jugando: los que juegan reciben 60 por segundo y los que miran 30', () => {
+    const { room, sent } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    const s = room.addMember({ name: 'Mira' }).id;
+    room.moveTo(a, 'red');
+    room.start();
+    sent.length = 0;
+    for (let i = 0; i < 60; i += 1) room.step();
+    const snaps = (id) => sent.filter((x) => x.id === id && x.msg instanceof ArrayBuffer).length;
+    expect(snaps(a)).toBe(60);
+    expect(snaps(s)).toBe(30);
+  });
+});

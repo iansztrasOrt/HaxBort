@@ -199,7 +199,9 @@ export class Hub {
   }
 
   sendBinary(buf) {
-    if (this.open && this.ws.bufferedAmount < 128 * 1024) this.ws.send(buf);
+    // Si la conexión está atorada, no se apilan fotos/entradas viejas (eso sería ping de más):
+    // se saltea y va la próxima, que trae el estado completo.
+    if (this.open && this.ws.bufferedAmount < 16 * 1024) this.ws.send(buf);
   }
 
   close() {
@@ -267,6 +269,17 @@ class LocalRoomBase {
     queueMicrotask(() => this.onMessage?.(msg));
   }
 
+  /** Cada tick: primero la entrada de este jugador (beforeStep), después la sala. Así su tecla
+   *  entra en el MISMO tick, sin esperar en la cola ni depender del refresco de la pantalla. */
+  tick() {
+    try {
+      this.beforeStep?.();
+    } catch (e) {
+      console.error('[tick]', e);
+    }
+    this.room?.step();
+  }
+
   send(obj) {
     if (obj?.t === 'pong') return;
     this.room?.handle(this.selfId, obj);
@@ -294,7 +307,7 @@ export class LocalSession extends LocalRoomBase {
     this.room.moveTo(this.selfId, 'red');
     this.room.addBot('blue');
     this.room.greet(this.selfId);
-    this.ticker = createBrowserTicker(() => this.room.step());
+    this.ticker = createBrowserTicker(() => this.tick());
   }
 
   get transportLabel() {
@@ -432,7 +445,9 @@ class HostLink {
   send(msg) {
     if (this.mode === 'dc') {
       if (msg instanceof ArrayBuffer) {
-        if (this.fast?.readyState === 'open' && this.fast.bufferedAmount < 64 * 1024) this.fast.send(msg);
+        // Canal rápido (sin reenvíos): si quedan fotos sin salir, la subida está llena; mandar
+        // más solo las haría llegar tarde. Se saltea esta y la siguiente llega fresca.
+        if (this.fast?.readyState === 'open' && this.fast.bufferedAmount < 4 * 1024) this.fast.send(msg);
       } else if (this.rel?.readyState === 'open') sendRel(this.rel, msg);
     } else if (msg instanceof ArrayBuffer) this.host.hub.sendBinary(relayFrame(this.id, msg));
     else this.host.hub.send({ t: 'relay', link: this.id, msg });
@@ -486,7 +501,7 @@ export class HostSession extends LocalRoomBase {
     ];
     hub.relayAny = (buf, link) => this.links.get(link)?.receive(buf, 'relay');
     this.room.greet(this.selfId);
-    this.ticker = createBrowserTicker(() => this.room.step());
+    this.ticker = createBrowserTicker(() => this.tick());
     this.pinger = setInterval(() => {
       const ts = performance.now();
       for (const l of this.byMember.values()) l.send({ t: 'ping', ts });
@@ -604,7 +619,8 @@ export class GuestSession {
 
   sendInput(buf) {
     if (this.mode === 'dc') {
-      if (this.fast?.readyState === 'open' && this.fast.bufferedAmount < 16 * 1024) this.fast.send(buf);
+      // Cada entrada lleva también las 2 anteriores, así que saltear una con la red atorada no pierde teclas.
+      if (this.fast?.readyState === 'open' && this.fast.bufferedAmount < 256) this.fast.send(buf);
     } else if (this.mode === 'relay') this.hub.sendBinary(relayFrame(this.link, buf));
   }
 

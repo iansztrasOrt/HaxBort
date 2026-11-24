@@ -11,7 +11,7 @@ import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
 import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protocol.js';
 import { createRenderer } from './render.js';
 import { SAMPLE_LAB } from './sample-lab.js';
-import { Hub, ServerSession, HostSession, GuestSession, LocalSession } from './net.js';
+import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker } from './net.js';
 
 const $ = (id) => document.getElementById(id);
 const STEP_MS = 1000 / 60;
@@ -282,6 +282,8 @@ async function refreshRooms() {
 
 // ---------------------------------------------------------------- entrar y salir de salas
 function resetGameState() {
+  clientClock?.stop();
+  clientClock = null;
   app.me = null;
   app.room = null;
   app.map = null;
@@ -292,14 +294,34 @@ function resetGameState() {
   app.prevBits = [0, 0];
   app.paused = false;
   app.offsets = new Map();
+  app.snapTick = -1;
   app.hist = [];
   app.lastPhase = 'idle';
   chat.length = 0;
   renderChat();
 }
 
+// Reloj del jugador: la simulación local y el envío de teclas van a 60 Hz exactos, no al ritmo de
+// la pantalla (requestAnimationFrame se traba, se atrasa con la pestaña de fondo y a 75/144 Hz
+// manda las teclas de a tirones, lo que obliga al anfitrión a guardar más entradas en espera).
+//   - Anfitrión y práctica: la tecla se toma en el mismo tick de la sala, justo antes de simularlo.
+//   - Invitado y sala en el servidor: un reloj propio (Worker) a 60 Hz.
+let clientClock = null;
+function clientTick() {
+  if (app.screen !== 'game') return;
+  gameStep();
+  app.lastTickAt = performance.now();
+}
+function startClientClock(sess) {
+  clientClock?.stop();
+  clientClock = null;
+  if (sess.kind === 'host' || sess.kind === 'local') sess.beforeStep = clientTick;
+  else clientClock = createBrowserTicker(clientTick);
+}
+
 function attach(sess) {
   app.sess = sess;
+  startClientClock(sess);
   sess.onMessage = onNet;
   sess.onDown = (reason) => {
     if (app.sess !== sess) return;
@@ -528,6 +550,7 @@ function buildMatch() {
   app.mapBallRadius = st.discs[0]?.radius ?? null;
   app.builtBall = app.room?.settings?.ballRadius ?? null;
   app.match = createMatch(withBallRadius(st, app.builtBall), {});
+  app.snapTick = -1;
   app.pending = [];
   app.offsets = new Map();
 }
@@ -600,6 +623,10 @@ function onSnapshot(buf) {
   if (!m) return;
   const snap = decodeSnapshot(buf);
   if (!snap) return;
+  // El canal rápido no garantiza el orden: una foto vieja que llega tarde se descarta (aplicarla
+  // haría retroceder el juego un instante: tirones).
+  if (snap.meta.k < app.snapTick && app.snapTick - snap.meta.k < 600) return;
+  app.snapTick = snap.meta.k;
   const before = new Map(m.world.discs.map((d, i) => [discKey(d, i), [d.x, d.y]]));
   const { paused, ack } = applySnapshot(m, snap, app.names);
   app.paused = paused;
@@ -642,8 +669,88 @@ function onEvents(events) {
 }
 
 // ---------------------------------------------------------------- teclado y entradas
-const KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'ShiftLeft', 'Numpad0'] };
-const GAME_CODES = new Set(Object.values(KEYS).flat());
+// Controles: cada jugador elige los suyos (se guardan en su navegador, en prefs.keys).
+const DEFAULT_KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'ShiftLeft', 'Numpad0'] };
+const KEY_ACTIONS = [['up', 'Arriba'], ['down', 'Abajo'], ['left', 'Izquierda'], ['right', 'Derecha'], ['kick', 'Patear']];
+const MAX_KEYS_PER_ACTION = 8;
+const RESERVED_KEYS = new Set(['Escape']); // Esc siempre abre y cierra la sala
+function loadKeys(saved) {
+  const out = {};
+  const seen = new Set();
+  for (const [action] of KEY_ACTIONS) {
+    const list = saved && Array.isArray(saved[action]) ? saved[action] : DEFAULT_KEYS[action];
+    out[action] = list.filter((c) => typeof c === 'string' && c.length <= 32 && !RESERVED_KEYS.has(c) && !seen.has(c) && seen.add(c)).slice(0, MAX_KEYS_PER_ACTION);
+  }
+  return out;
+}
+let KEYS = loadKeys(prefs.keys);
+let GAME_CODES = new Set(Object.values(KEYS).flat());
+function setKeys(next) {
+  KEYS = loadKeys(next);
+  GAME_CODES = new Set(Object.values(KEYS).flat());
+  prefs.keys = KEYS;
+  savePrefs();
+  pressed.clear();
+  renderBinds();
+}
+const KEY_NAMES = {
+  ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Space: 'Espacio', Enter: 'Enter', Tab: 'Tab', Backspace: 'Borrar',
+  ShiftLeft: 'Shift izq.', ShiftRight: 'Shift der.', ControlLeft: 'Ctrl izq.', ControlRight: 'Ctrl der.', AltLeft: 'Alt', AltRight: 'Alt Gr',
+  MetaLeft: 'Win/Cmd', MetaRight: 'Win/Cmd der.', CapsLock: 'Bloq Mayús', Comma: ',', Period: '.', Slash: '/', Semicolon: 'Ñ', Quote: '´',
+  BracketLeft: '`', BracketRight: '+ (der.)', Backslash: 'Ç', Minus: '−', Equal: '+', Backquote: 'º', IntlBackslash: '<',
+};
+function keyName(code) {
+  if (KEY_NAMES[code]) return KEY_NAMES[code];
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^Numpad/.test(code)) return `Num ${code.slice(6).replace('Add', '+').replace('Subtract', '−').replace('Multiply', '×').replace('Divide', '/').replace('Decimal', '.').replace('Enter', 'Enter')}`;
+  return code;
+}
+
+/** Editor de controles (en Ajustes): una fila por acción, con sus teclas y un botón para agregar. */
+let capturing = null; // { action, btn }
+function renderBinds() {
+  const box = $('binds');
+  if (!box) return;
+  box.replaceChildren();
+  for (const [action, label] of KEY_ACTIONS) {
+    const chips = KEYS[action].map((code) => el('span', { class: 'bind-key' }, el('kbd', { text: keyName(code) }),
+      el('button', { type: 'button', class: 'bind-x', title: `Sacar ${keyName(code)}`, 'aria-label': `Sacar ${keyName(code)} de ${label}`, onclick: () => setKeys({ ...KEYS, [action]: KEYS[action].filter((c) => c !== code) }) }, '×')));
+    const add = el('button', {
+      type: 'button', class: 'btn ghost bind-add', disabled: KEYS[action].length >= MAX_KEYS_PER_ACTION,
+      onclick: (e) => startCapture(action, e.currentTarget),
+    }, '+ Tecla');
+    box.append(el('div', { class: 'bind-row' }, el('span', { class: 'bind-label', text: label }),
+      el('div', { class: 'bind-keys' }, ...chips, KEYS[action].length ? null : el('span', { class: 'small muted', text: 'sin tecla' }), add)));
+  }
+}
+function stopCapture() {
+  if (!capturing) return;
+  capturing.btn.textContent = '+ Tecla';
+  capturing.btn.classList.remove('listening');
+  capturing = null;
+}
+function startCapture(action, btn) {
+  stopCapture();
+  capturing = { action, btn };
+  btn.textContent = 'Apretá una tecla… (Esc cancela)';
+  btn.classList.add('listening');
+}
+// Fase de captura: la tecla elegida no llega al juego ni a los atajos.
+window.addEventListener('keydown', (e) => {
+  if (!capturing) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (e.code === 'Escape' || !e.code) return stopCapture();
+  const { action } = capturing;
+  const label = KEY_ACTIONS.find((a) => a[0] === action)[1];
+  const next = Object.fromEntries(Object.entries(KEYS).map(([a, list]) => [a, list.filter((c) => c !== e.code)]));
+  const before = Object.entries(KEYS).find(([a, list]) => a !== action && list.includes(e.code));
+  next[action] = [...next[action], e.code];
+  stopCapture();
+  setKeys(next);
+  toast(before ? `${keyName(e.code)} ahora es ${label} (antes era ${KEY_ACTIONS.find((a) => a[0] === before[0])[1]}).` : `${keyName(e.code)} → ${label}.`, 2200);
+}, true);
 const pressed = new Set();
 const touchState = { bits: 0 };
 
@@ -682,16 +789,20 @@ let frames = 0;
 let fpsShown = 0;
 function loop(now) {
   const dt = Math.min(250, now - last);
-  acc += dt;
   last = now;
-  let steps = 0;
-  while (acc >= STEP_MS && steps < 6) {
-    if (app.screen === 'game') gameStep();
-    else demoStep();
-    acc -= STEP_MS;
-    steps += 1;
+  if (app.screen !== 'game') {
+    // Fondo animado del menú (no es el partido): sigue al ritmo de la pantalla.
+    acc += dt;
+    let steps = 0;
+    while (acc >= STEP_MS && steps < 6) {
+      demoStep();
+      acc -= STEP_MS;
+      steps += 1;
+    }
+    if (acc >= STEP_MS) acc %= STEP_MS;
   }
-  if (acc >= STEP_MS) acc %= STEP_MS; // la pestaña estuvo trabada: no arrastrar atraso
+  // Fracción de tick transcurrida desde el último tick del partido (para dibujar entre ticks).
+  acc = app.screen === 'game' ? Math.min(STEP_MS, Math.max(0, now - (app.lastTickAt || now))) : acc;
   if (app.screen === 'game' && app.match) {
     drawWithOffsets(app.match, dt, acc / STEP_MS);
     updateHud();
@@ -1385,6 +1496,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing(e) || modalOpen()) return;
+  // Una tecla elegida para jugar le gana a los atajos (T, Enter, + − 0).
+  if (GAME_CODES.has(e.code) && !app.roomOpen && !chatOpen()) {
+    pressed.add(e.code);
+    e.preventDefault();
+    return undefined;
+  }
   if (e.code === 'KeyT' || e.code === 'Enter') {
     if (e.code === 'Enter' && !app.roomOpen) return;
     e.preventDefault();
@@ -1570,6 +1687,11 @@ function bind() {
 
   $('zoom-range').addEventListener('input', (e) => setZoom(Number(e.target.value), true));
   $('bot-skill').addEventListener('change', (e) => act({ t: 'skill', value: Number(e.target.value) }));
+  renderBinds();
+  $('keys-reset').addEventListener('click', () => {
+    setKeys(DEFAULT_KEYS);
+    toast('Controles restablecidos.', 1500);
+  });
   $('opt-sound').checked = prefs.sound;
   $('opt-sound').addEventListener('change', (e) => {
     prefs.sound = e.target.checked;

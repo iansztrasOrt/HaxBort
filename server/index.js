@@ -85,7 +85,7 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
         const ws = entry.sockets.get(id);
         if (!ws || ws.readyState !== 1) return;
         if (msg instanceof ArrayBuffer) {
-          if (ws.bufferedAmount < 256 * 1024) ws.send(msg); // cliente lento: se saltea la foto
+          if (ws.bufferedAmount < 16 * 1024) ws.send(msg); // conexión atorada: se saltea la foto (no se apilan fotos viejas)
         } else ws.send(JSON.stringify(msg));
       },
       close(id, reason) {
@@ -289,7 +289,7 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
     if (buf.length >= 3 && buf[0] === RELAY) {
       const id = buf.readUInt16BE(1);
       const peer = peerOf(ws, id);
-      if (peer && peer.readyState === 1 && peer.bufferedAmount < 256 * 1024) peer.send(buf);
+      if (peer && peer.readyState === 1 && peer.bufferedAmount < 16 * 1024) peer.send(buf);
       return;
     }
     const e = ctx.code && rooms.get(ctx.code);

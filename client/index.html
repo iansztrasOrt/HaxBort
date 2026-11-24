@@ -299,6 +299,17 @@ body:not(.outside) .version-tag { display: none; }
 .star.on { color: var(--flood); }
 .export { display: grid; gap: 6px; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: center; font-size: 14px; }
+.binds { display: grid; gap: 6px; }
+.bind-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px; align-items: center; }
+.bind-label { font-weight: 600; font-size: 14px; }
+.bind-keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.bind-key { display: inline-flex; align-items: center; gap: 2px; background: var(--panel-3); border: 1px solid var(--line); border-radius: 8px; padding: 2px 2px 2px 8px; }
+.bind-key kbd { border: 0; background: none; padding: 0; font-size: 13px; }
+.bind-x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 5px; border-radius: 6px; }
+.bind-x:hover { color: var(--chalk); background: rgba(255, 255, 255, .08); }
+.bind-add { min-height: 28px; padding: 2px 10px; font-size: 13px; }
+.bind-add.listening { border-color: var(--flood); color: var(--flood); animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: .55; } }
 
 /* ---------- táctil ---------- */
 .touch { position: absolute; inset: auto 0 0 0; height: 46%; pointer-events: none; z-index: 3; }
@@ -537,10 +548,11 @@ body.touch-on .hint { display: none; }
         <select id="bot-skill"><option value="0.55">Tranqui</option><option value="0.8" selected>Normal</option><option value="0.97">Picante</option></select>
       </label>
       <label class="check"><input type="checkbox" id="opt-sound" checked> Sonidos</label>
-      <h3>Controles</h3>
+      <div class="row" style="justify-content:space-between;align-items:center"><h3>Tus controles</h3><button class="btn ghost" type="button" id="keys-reset" style="min-height:30px">Restablecer</button></div>
+      <div class="binds" id="binds"></div>
+      <p class="small muted" style="margin:0">Solo cambian en tu compu. Patear: mantené apretado y patea cuando llega la pelota (anillo blanco). Si usás T, Enter, + o − para jugar, ese atajo deja de andar (el chat sigue en el botón 💬).</p>
+      <h3>Atajos</h3>
       <div class="keys">
-        <kbd>← ↑ → ↓</kbd><span>o <kbd>W A S D</kbd> para moverte</span>
-        <kbd>X</kbd><span>o <kbd>Espacio</kbd>: mantené y patea cuando llega la pelota (anillo blanco)</span>
         <kbd>Esc</kbd><span>abre y cierra la sala</span>
         <kbd>T</kbd><span>chat · <kbd>Enter</kbd> envía · <kbd>/help</kbd> comandos</span>
         <kbd>+ −</kbd><span>zoom (también la rueda). <kbd>0</kbd> muestra toda la cancha; de cerca la cámara te sigue.</span>

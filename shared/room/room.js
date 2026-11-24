@@ -407,9 +407,17 @@ export class Room {
         }
       }
     }
-    // Una foto por tick (60 por segundo): lo más fresco posible para todos.
+    // Una foto por tick (60 por segundo) para los que juegan: lo más fresco posible. Los que miran
+    // reciben una cada dos ticks (30 por segundo, su pantalla igual dibuja entre medio): así el
+    // anfitrión gasta menos subida de internet y le queda más para los que juegan.
     const body = snapshotBody(this.match, { paused: this.paused });
-    for (const m of this.members.values()) if (!m.bot && m.connected) this.send(m.id, withAck(body, m.lastSeq));
+    this.snapSeq = (this.snapSeq || 0) + 1;
+    const half = this.snapSeq % 2 === 0;
+    for (const m of this.members.values()) {
+      if (m.bot || !m.connected) continue;
+      if (m.team === 'spectator' && !half && this.match.phase !== 'idle') continue;
+      this.send(m.id, withAck(body, m.lastSeq));
+    }
     if (this.dirty || phase !== this.match.phase) {
       this.dirty = false;
       this.broadcast(this.state());
