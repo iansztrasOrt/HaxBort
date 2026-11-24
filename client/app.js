@@ -976,7 +976,6 @@ function renderRoom() {
       const li = el('li', { class: `prow${p.id === app.me ? ' me' : ''}${p.away ? ' away' : ''}`, draggable: admin ? 'true' : null, 'data-id': p.id },
         el('span', { class: 'av', style: `background:${color}`, text: (p.avatar || '?').slice(0, 2) }),
         el('span', { class: 'nm', text: p.name, title: p.name }),
-        team === 'spectator' && p === waiting[0] && waiting.length > 0 ? el('span', { class: 'tag next', title: 'Primero en la fila de espera', text: '1°' }) : null,
         p.admin ? el('span', { class: 'crown', title: 'Admin', text: '👑' }) : null,
         p.bot ? el('span', { class: 'tag', text: 'bot' }) : null,
         p.away ? el('span', { class: 'tag', text: 'desconectado' }) : null,
