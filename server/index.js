@@ -15,6 +15,7 @@ import { WebSocketServer } from 'ws';
 import { Room, cleanText, cleanName, cleanAvatar } from '../shared/room/room.js';
 import { createTicker } from '../shared/room/ticker.js';
 import { decodeInput } from '../shared/net/protocol.js';
+import { createStore, createTorneosApi } from './torneos.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -23,7 +24,9 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RELAY = 0xfe;
 const MSGS_PER_SEC = 40; // mensajes de texto por conexión (las entradas binarias van aparte)
 
-export function createServer({ port = PORT, html = null, log = console.log } = {}) {
+export function createServer({ port = PORT, html = null, log = console.log, store = createStore(), torneoRates = {} } = {}) {
+  const torneos = createTorneosApi({ store, log, rates: torneoRates });
+  torneos.warm();
   const page = () => html ?? fs.readFileSync(path.join(ROOT, 'dist/index.html'));
   const rooms = new Map(); // code → { kind: 'server', room, sockets: Map(id → ws) } | { kind: 'p2p', host: ws, summary, links: Set }
   const links = new Map(); // linkId → { code, guest: ws }
@@ -55,6 +58,11 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     const p = url.pathname;
+    if (p.startsWith('/api/torneos')) {
+      const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
+      torneos.handle(req, res, url, ip).catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
+      return;
+    }
     if (p === '/healthz') {
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('ok');
@@ -369,6 +377,7 @@ export function createServer({ port = PORT, html = null, log = console.log } = {
   return {
     server, wss, rooms,
     close() {
+      store.close().catch(() => {});
       ticker.stop();
       clearInterval(slow);
       clearInterval(heartbeat);

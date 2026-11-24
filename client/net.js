@@ -377,7 +377,8 @@ class HostLink {
   /** Mensaje del invitado. El camino por el que llega su "join" define por dónde le respondo. */
   receive(msg, via) {
     const room = this.host.room;
-    if (!room || this.mode === 'closed') return;
+    // Un canal reemplazado por otro del mismo jugador ya no habla por él (ni puede volver a entrar).
+    if (!room || this.superseded) return;
     if (msg instanceof ArrayBuffer) {
       if (this.memberId) {
         const list = decodeInput(msg);
@@ -433,6 +434,7 @@ class HostLink {
     if (old && old !== this) {
       old.memberId = null;
       old.mode = 'closed';
+      old.superseded = true;
       this.host.links.delete(old.id);
       this.host.hub.send({ t: 'unlink', link: old.id, reason: 'Entraste a la sala desde otra conexión.' });
       old.close();

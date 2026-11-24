@@ -13,6 +13,7 @@ import { createRenderer, drawKit, drawDiscLabel } from './render.js';
 import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
 import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker } from './net.js';
+import { createTorneosUI } from './torneos.js';
 
 const $ = (id) => document.getElementById(id);
 const STEP_MS = 1000 / 60;
@@ -144,9 +145,11 @@ function demoStep() {
 }
 
 // ---------------------------------------------------------------- pantallas
+let torneos = null; // pantalla de torneos (se crea al iniciar)
 function show(screen) {
   app.screen = screen;
-  for (const s of ['welcome', 'name', 'lobby']) $(`scr-${s}`).hidden = s !== screen;
+  for (const s of ['welcome', 'name', 'lobby', 'torneos']) $(`scr-${s}`).hidden = s !== screen;
+  if (screen !== 'torneos') torneos?.leave();
   document.body.classList.toggle('outside', screen !== 'game');
   if (screen !== 'game') {
     $('room').hidden = true;
@@ -1691,6 +1694,11 @@ function bind() {
     }
     profile = { name, avatar: $('avatar').value.trim().slice(0, 2) || name.slice(0, 1).toUpperCase() };
     writeJSON(localStorage, K.profile, profile);
+    if (app.torneoCode) {
+      torneos.open(app.torneoCode);
+      app.torneoCode = '';
+      return;
+    }
     show('lobby');
     if (app.joinCode) joinRoom(app.joinCode);
   });
@@ -1705,6 +1713,8 @@ function bind() {
   });
   $('btn-refresh').addEventListener('click', refreshRooms);
   $('btn-practice').addEventListener('click', practice);
+  $('btn-torneos').addEventListener('click', () => torneos.home());
+  $('torneos-back').addEventListener('click', () => torneos.back());
 
   $('btn-menu').addEventListener('click', () => (app.roomOpen ? closeRoom() : openRoom()));
   $('btn-chat').addEventListener('click', () => (chatOpen() ? closeChatOverlay() : openChatOverlay()));
@@ -1836,11 +1846,13 @@ async function checkVersion() {
 
 async function init() {
   checkVersion();
+  torneos = createTorneosUI({ $, el, toast, getProfile: () => profile, show, maps: BUILTIN_MAPS.map((m) => ({ id: m.id, name: m.name })) });
   bind();
   setupTouch();
   setZoom(prefs.zoom, true);
   const params = new URLSearchParams(location.search);
   app.joinCode = (params.get('sala') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  app.torneoCode = (params.get('torneo') || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
   show('welcome');
   setServerState();
   requestAnimationFrame(loop);

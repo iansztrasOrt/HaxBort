@@ -1,6 +1,6 @@
 {
   "name": "haxbort",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "HaxBort: fútbol 2D de discos multijugador en el navegador, con salas por código, conexión directa entre jugadores y estadios .hbs.",
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "pg": "^8.23.1",
     "ws": "^8.23.0"
   },
   "main": "server/index.js"
