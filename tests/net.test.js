@@ -378,3 +378,49 @@ describe('fotos', () => {
     expect(snaps(s)).toBe(30);
   });
 });
+
+describe('camisetas y privacidad', async () => {
+  const { cleanKit, DEFAULT_KITS, KIT_PATTERNS, KIT_PRESETS } = await import('../shared/game/kits.js');
+  it('cleanKit valida diseño, colores, ángulo, número y borde', () => {
+    expect(cleanKit({ pattern: 'bastones', colors: ['#75AADB', 'fff', 'zzz'], angle: 370, text: '000', border: '#123456' }, DEFAULT_KITS.red))
+      .toEqual({ pattern: 'bastones', colors: ['75aadb', 'ffffff', DEFAULT_KITS.red.colors[2]], angle: 10, text: '000000', border: '123456' });
+    expect(cleanKit({ pattern: 'inventado' }, DEFAULT_KITS.red)).toBe(null);
+    expect(cleanKit('x', DEFAULT_KITS.red)).toBe(null);
+    for (const p of KIT_PRESETS) expect(cleanKit(p.kit, DEFAULT_KITS.red)).toEqual(p.kit);
+    expect(KIT_PATTERNS.length).toBeGreaterThanOrEqual(15);
+  });
+
+  it('solo el admin cambia la camiseta; todos la reciben en el estado; se puede restablecer', () => {
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    const b = room.addMember({ name: 'B' }).id;
+    room.handle(b, { t: 'kit', team: 'red', kit: { pattern: 'cuadros' } });
+    expect(room.settings.kits.red.pattern).toBe('liso');
+    room.handle(a, { t: 'kit', team: 'red', kit: { pattern: 'cuadros', colors: ['111111', 'ffffff', '000000'] } });
+    expect(room.state().settings.kits.red).toMatchObject({ pattern: 'cuadros', colors: ['111111', 'ffffff', '000000'] });
+    expect(room.settings.kits.blue).toEqual(DEFAULT_KITS.blue);
+    room.handle(a, { t: 'kit', team: 'red', reset: true });
+    expect(room.settings.kits.red).toEqual(DEFAULT_KITS.red);
+  });
+
+  it('privacidad: pública/privada, contraseña y cupo, solo el admin', () => {
+    const { room, sent } = fakeRoom({ maxPlayers: 10 });
+    const a = room.addMember({ name: 'A' }).id;
+    const b = room.addMember({ name: 'B' }).id;
+    room.handle(b, { t: 'roomcfg', isPublic: false });
+    expect(room.isPublic).toBe(true);
+    room.handle(a, { t: 'roomcfg', isPublic: false });
+    expect(room.isPublic).toBe(false);
+    expect(room.state().isPublic).toBe(false);
+    room.handle(a, { t: 'roomcfg', password: 'secreta' });
+    expect(room.state().hasPassword).toBe(true);
+    expect(JSON.stringify(sent)).not.toContain('secreta');
+    expect(room.addMember({ name: 'C' }).error).toBe('password');
+    room.handle(a, { t: 'roomcfg', password: '' });
+    expect(room.addMember({ name: 'C' }).ok).toBe(true);
+    room.handle(a, { t: 'roomcfg', maxPlayers: 2 });
+    expect(room.maxPlayers).toBe(10);
+    room.handle(a, { t: 'roomcfg', maxPlayers: 5 });
+    expect(room.maxPlayers).toBe(5);
+  });
+});

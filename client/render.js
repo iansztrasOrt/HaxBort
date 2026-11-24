@@ -26,6 +26,123 @@ export function cameraBounds(stadium) {
   return { w: w + 20, h: h + 20 };
 }
 
+// ---------------------------------------------------------------- camisetas
+/** Pinta el diseño de una camiseta dentro de un círculo (x, y, r). La bolita sigue siendo un
+ *  círculo: el diseño se recorta al borde y encima van el borde y el número del jugador. */
+export function drawKit(ctx, kit, x, y, r) {
+  const c = (kit.colors || []).map((h) => `#${h}`);
+  const [a, b, d] = [c[0] || '#888888', c[1] || '#ffffff', c[2] || '#000000'];
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, TAU);
+  ctx.clip();
+  ctx.translate(x, y);
+  ctx.rotate(((kit.angle || 0) * Math.PI) / 180);
+  const R = r * 1.5; // cubre todo el círculo aunque esté girado
+  const rect = (color, x0, y0, w, h) => { ctx.fillStyle = color; ctx.fillRect(x0, y0, w, h); };
+  rect(a, -R, -R, 2 * R, 2 * R);
+  switch (kit.pattern) {
+    case 'franjas': { // tres franjas verticales iguales
+      const w = (2 * r) / 3;
+      rect(a, -r, -R, w, 2 * R);
+      rect(b, -r + w, -R, w, 2 * R);
+      rect(d, -r + 2 * w, -R, w, 2 * R);
+      rect(a, -R, -R, R - r, 2 * R);
+      rect(d, r, -R, R - r, 2 * R);
+      break;
+    }
+    case 'bastones': { // rayas finas alternadas
+      const w = (2 * r) / 7;
+      for (let i = -4; i <= 4; i += 1) if (i % 2 === 0) rect(b, -w / 2 + i * w, -R, w, 2 * R);
+      break;
+    }
+    case 'mitades': rect(b, 0, -R, R, 2 * R); break;
+    case 'banda': rect(b, -R, -r * 0.24, 2 * R, r * 0.48); break;
+    case 'faja': rect(b, -R, -r * 0.3, 2 * R, r * 0.6); rect(d, -R, -r * 0.08, 2 * R, r * 0.16); break;
+    case 'cuartos': rect(b, 0, -R, R, R); rect(b, -R, 0, R, R); break;
+    case 'cuadros': {
+      const w = (2 * r) / 4;
+      for (let i = -3; i < 3; i += 1) for (let j = -3; j < 3; j += 1) if ((i + j) % 2 === 0) rect(b, i * w, j * w, w, w);
+      break;
+    }
+    case 'cruz': rect(b, -r * 0.2, -R, r * 0.4, 2 * R); rect(b, -R, -r * 0.2, 2 * R, r * 0.4); break;
+    case 'v': {
+      ctx.fillStyle = b;
+      ctx.beginPath();
+      ctx.moveTo(-R, -r * 0.55); ctx.lineTo(0, r * 0.25); ctx.lineTo(R, -r * 0.55);
+      ctx.lineTo(R, -r * 0.15); ctx.lineTo(0, r * 0.65); ctx.lineTo(-R, -r * 0.15);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case 'centro': ctx.fillStyle = b; ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, TAU); ctx.fill(); break;
+    case 'aro':
+      ctx.strokeStyle = b; ctx.lineWidth = r * 0.24; ctx.beginPath(); ctx.arc(0, 0, r * 0.72, 0, TAU); ctx.stroke();
+      break;
+    case 'degradado': {
+      const g = ctx.createLinearGradient(-r, 0, r, 0);
+      g.addColorStop(0, a); g.addColorStop(0.5, b); g.addColorStop(1, d);
+      ctx.fillStyle = g;
+      ctx.fillRect(-R, -R, 2 * R, 2 * R);
+      break;
+    }
+    case 'lunares': {
+      ctx.fillStyle = b;
+      const s = r * 0.62;
+      for (let i = -2; i <= 2; i += 1) {
+        for (let j = -2; j <= 2; j += 1) {
+          ctx.beginPath();
+          ctx.arc(i * s + (j % 2 ? s / 2 : 0), j * s * 0.87, r * 0.15, 0, TAU);
+          ctx.fill();
+        }
+      }
+      break;
+    }
+    case 'estrella': {
+      ctx.fillStyle = b;
+      ctx.beginPath();
+      for (let i = 0; i < 10; i += 1) {
+        const rr = i % 2 ? r * 0.36 : r * 0.88;
+        const t = -Math.PI / 2 + (i * Math.PI) / 5;
+        ctx.lineTo(Math.cos(t) * rr, Math.sin(t) * rr);
+      }
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    case 'rayo': {
+      ctx.fillStyle = b;
+      ctx.beginPath();
+      ctx.moveTo(r * 0.15, -R); ctx.lineTo(-r * 0.35, r * 0.1); ctx.lineTo(0, r * 0.1);
+      ctx.lineTo(-r * 0.2, R); ctx.lineTo(r * 0.4, -r * 0.15); ctx.lineTo(r * 0.05, -r * 0.15); ctx.lineTo(r * 0.45, -R);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    }
+    default: break; // liso
+  }
+  ctx.restore();
+}
+
+/** Número/avatar del jugador encima de la camiseta, con contorno para que se lea sobre cualquier diseño. */
+export function drawDiscLabel(ctx, text, x, y, r, color = '#ffffff') {
+  ctx.font = `700 ${Math.round(r * 1.05)}px "Saira Condensed", system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(1, r * 0.16);
+  ctx.strokeStyle = luminance(color) > 0.55 ? 'rgba(0,0,0,.55)' : 'rgba(255,255,255,.55)';
+  ctx.strokeText(text, x, y + 1);
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y + 1);
+}
+function luminance(c) {
+  const h = c.replace('#', '');
+  if (h.length !== 6) return 1;
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 export function createRenderer(canvas) {
   const ctx = canvas.getContext('2d');
   const cam = { x: 0, y: 0, s: 1, ready: false };
@@ -176,7 +293,7 @@ export function createRenderer(canvas) {
     ctx.stroke();
   }
 
-  function render(m, { focusId = null, names = true, zoom = 1, dt = 1000 / 60 } = {}) {
+  function render(m, { focusId = null, names = true, zoom = 1, dt = 1000 / 60, kits = null } = {}) {
     const dpr = resize();
     const focus = m.players.find((p) => p.id === focusId)?.disc || null;
     updateCamera(m, focus, zoom, Math.min(100, Math.max(0, dt)));
@@ -202,24 +319,20 @@ export function createRenderer(canvas) {
     const playerByDisc = new Map(m.players.filter((p) => p.disc).map((p) => [p.disc, p]));
     for (const d of world.discs) {
       const p = playerByDisc.get(d);
+      const kit = p && kits ? kits[p.team] : null;
+      if (kit) drawKit(ctx, kit, d.x, d.y, d.r);
       ctx.beginPath();
       ctx.arc(d.x, d.y, d.r, 0, TAU);
-      if (d.color) {
+      if (d.color && !kit) {
         ctx.fillStyle = d.color;
         ctx.fill();
       }
       if (d.color || p) {
         ctx.lineWidth = p && p.kicking ? 3 : 2;
-        ctx.strokeStyle = p && p.kicking ? '#ffffff' : '#0b0f10';
+        ctx.strokeStyle = p && p.kicking ? '#ffffff' : (kit ? `#${kit.border}` : '#0b0f10');
         ctx.stroke();
       }
-      if (p && p.avatar) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `700 ${Math.round(d.r * 1.05)}px "Saira Condensed", system-ui, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(p.avatar.slice(0, 2), d.x, d.y + 1);
-      }
+      if (p && p.avatar) drawDiscLabel(ctx, p.avatar.slice(0, 2), d.x, d.y, d.r, kit ? `#${kit.text}` : '#ffffff');
     }
     if (names) {
       ctx.textAlign = 'center';

@@ -271,6 +271,27 @@ body:not(.outside) .version-tag { display: none; }
 .tabs button[aria-selected='true'] { color: var(--chalk); border-color: var(--flood); }
 .modal-head .btn { margin-bottom: 8px; }
 .panel { overflow: auto; padding: 16px; display: grid; gap: 14px; align-content: start; min-height: 0; }
+.kits-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.kit-col { display: grid; gap: 12px; align-content: start; background: var(--panel-2); border-radius: 12px; padding: 14px; border-top: 4px solid var(--red); }
+.kit-col.blue { border-top-color: var(--blue); }
+.kit-top { display: flex; align-items: center; gap: 14px; }
+.kit-top h3 { margin: 0; }
+.kit-preview { width: 96px; height: 96px; flex: none; }
+.kit-sub { font: 700 11px var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px; }
+.kit-opt { display: grid; justify-items: center; gap: 2px; padding: 5px 2px 4px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,.18); cursor: pointer; color: var(--chalk); font: 600 10px var(--body); }
+.kit-opt:hover:not(:disabled) { border-color: var(--muted); }
+.kit-opt.on { border-color: var(--flood); box-shadow: inset 0 0 0 1px var(--flood); }
+.kit-opt:disabled { cursor: default; opacity: .7; }
+.kit-opt canvas { width: 34px; height: 34px; }
+.kit-colors { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.kit-colors label { display: grid; gap: 4px; font: 600 11px var(--body); color: var(--muted); justify-items: center; text-align: center; }
+.kit-colors input[type=color] { width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: none; padding: 2px; cursor: pointer; }
+.kit-colors label.off { opacity: .35; }
+.kit-angle { display: grid; grid-template-columns: auto minmax(0, 1fr) 44px; gap: 10px; align-items: center; font-size: 13px; }
+.kit-angle input { accent-color: var(--flood); }
+@media (max-width: 760px) { .kits-panel { grid-template-columns: 1fr; } }
+.room-cfg { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
 .maps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .map-card { background: var(--panel-2); border: 2px solid transparent; border-radius: 10px; padding: 6px; display: grid; gap: 4px; cursor: pointer; text-align: left; color: var(--chalk); font: inherit; }
 .map-card:hover { border-color: var(--line); }
@@ -429,7 +450,12 @@ body.touch-on .hint { display: none; }
             <option value="server">En el servidor (si tu conexión es mala)</option>
           </select>
         </label>
-        <label class="check"><input type="checkbox" id="room-public" checked> Mostrarla en la lista de salas públicas</label>
+        <label class="field">Privacidad
+          <select id="room-privacy">
+            <option value="public" selected>Pública: aparece en la lista de salas</option>
+            <option value="private">Privada: solo se entra con el código</option>
+          </select>
+        </label>
         <button class="btn primary big" type="submit">Crear sala</button>
       </form>
       <form class="choice" id="join-form">
@@ -466,6 +492,7 @@ body.touch-on .hint { display: none; }
         <button class="btn" type="button" id="btn-rand" title="Mezcla a todos los jugadores al azar"><span class="ic">🔀</span>Mezclar</button>
         <button class="btn" type="button" id="btn-lock" title="Si está bloqueado, solo el admin cambia equipos"><span class="ic">🔓</span><span id="lock-label">Bloquear</span></button>
         <button class="btn" type="button" id="btn-reset" title="Manda a todos a espectadores"><span class="ic">↺</span>Reiniciar</button>
+        <button class="btn" type="button" id="btn-kits" title="Camisetas de los equipos"><span class="ic">👕</span>Camisetas</button>
       </div>
       <div class="teams" id="teams"></div>
     </div>
@@ -537,6 +564,13 @@ body.touch-on .hint { display: none; }
 </section>
 
 <!-- Ajustes -->
+<section class="modal" id="kits-modal" role="dialog" aria-modal="true" aria-label="Camisetas" hidden>
+  <div class="modal-card">
+    <div class="modal-head"><h2>Camisetas</h2><span class="small muted" id="kits-note"></span><span class="grow"></span><button class="btn ghost" type="button" data-close>Cerrar</button></div>
+    <div class="panel kits-panel" id="kits-panel"></div>
+  </div>
+</section>
+
 <section class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="Ajustes" hidden>
   <div class="modal-card narrow">
     <div class="modal-head"><h2>Ajustes</h2><span class="grow"></span><button class="btn ghost" type="button" data-close>Cerrar</button></div>
@@ -548,6 +582,21 @@ body.touch-on .hint { display: none; }
         <select id="bot-skill"><option value="0.55">Tranqui</option><option value="0.8" selected>Normal</option><option value="0.97">Picante</option></select>
       </label>
       <label class="check"><input type="checkbox" id="opt-sound" checked> Sonidos</label>
+      <div id="room-cfg" class="room-cfg" hidden>
+        <h3>Sala (solo el admin)</h3>
+        <label class="field">Privacidad
+          <select id="cfg-privacy">
+            <option value="public">Pública: aparece en la lista de salas</option>
+            <option value="private">Privada: solo se entra con el código</option>
+          </select>
+        </label>
+        <div class="row" style="align-items:end">
+          <label class="field grow">Contraseña <input class="input" id="cfg-pass" maxlength="20" autocomplete="off" placeholder="Sin contraseña"></label>
+          <label class="field" style="width:120px">Máx. personas <input class="input" id="cfg-max" type="number" inputmode="numeric" min="2" max="30" step="1"></label>
+          <button class="btn" type="button" id="cfg-save">Guardar</button>
+        </div>
+        <button class="btn ghost" type="button" id="cfg-nopass" hidden style="justify-self:start">Sacar la contraseña</button>
+      </div>
       <div class="row" style="justify-content:space-between;align-items:center"><h3>Tus controles</h3><button class="btn ghost" type="button" id="keys-reset" style="min-height:30px">Restablecer</button></div>
       <div class="binds" id="binds"></div>
       <p class="small muted" style="margin:0">Solo cambian en tu compu. Patear: mantené apretado y patea cuando llega la pelota (anillo blanco). Si usás T, Enter, + o − para jugar, ese atajo deja de andar (el chat sigue en el botón 💬).</p>

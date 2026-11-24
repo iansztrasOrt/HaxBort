@@ -11,6 +11,7 @@ import { createMatch, withBallRadius, addPlayer, removePlayer, setTeam, setInput
 import { botInput } from '../game/bot.js';
 import { BUILTIN_MAPS } from '../builtinMaps.js';
 import { snapshotBody, withAck } from '../net/protocol.js';
+import { DEFAULT_KITS, cleanKit } from '../game/kits.js';
 
 export const MAX_PLAYERS = 30;
 const END_DELAY_TICKS = Math.round(3.5 * TICK_RATE); // cartel de fin y vuelta a la sala
@@ -63,7 +64,7 @@ export class Room {
     this.offline = offline;
     this.transport = transport;
     this.members = new Map();
-    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null }; // ballRadius null = el del estadio
+    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kits: { red: { ...DEFAULT_KITS.red }, blue: { ...DEFAULT_KITS.blue } } }; // ballRadius null = el del estadio
     this.locked = false;
     this.paused = false;
     this.botSkill = 0.8;
@@ -531,6 +532,17 @@ export class Room {
         this.shuffle();
         this.sys('Equipos mezclados.');
         return true;
+      case 'kit': {
+        // Camiseta de un equipo (admin, en cualquier momento: solo cambia el dibujo).
+        if (!admin) return deny();
+        const team = msg.team === 'blue' ? 'blue' : msg.team === 'red' ? 'red' : null;
+        if (!team) return true;
+        const kit = msg.reset ? { ...DEFAULT_KITS[team] } : cleanKit(msg.kit, this.settings.kits[team]);
+        if (!kit) return this.tell(id, 'Esa camiseta no es válida.');
+        this.settings.kits = { ...this.settings.kits, [team]: kit };
+        this.dirty = true;
+        return true;
+      }
       case 'clearteam': {
         // Flechita del equipo → todos sus jugadores van al final de la fila de espera (en su orden).
         if (!admin) return deny();
@@ -600,10 +612,24 @@ export class Room {
         this.dirty = true;
         return true;
       case 'roomcfg': {
+        // Privacidad de la sala (admin): pública/privada, contraseña y cupo.
         if (!admin) return deny();
-        if (typeof msg.password === 'string') this.password = cleanText(msg.password, 20);
-        if (typeof msg.isPublic === 'boolean') this.isPublic = msg.isPublic;
-        if (msg.maxPlayers) this.maxPlayers = Math.min(MAX_PLAYERS, Math.max(this.members.size, 2, Number(msg.maxPlayers) || this.maxPlayers));
+        if (msg.maxPlayers !== undefined) {
+          const n = Number(msg.maxPlayers);
+          if (!Number.isInteger(n) || n < 2 || n > MAX_PLAYERS) return this.tell(id, `El máximo de personas tiene que ser un número entero de 2 a ${MAX_PLAYERS}.`);
+          if (n < this.members.size) return this.tell(id, `Ya hay ${this.members.size} personas en la sala: el máximo no puede ser menos.`);
+          if (n !== this.maxPlayers) this.sys(`Máximo de personas: ${n}.`);
+          this.maxPlayers = n;
+        }
+        if (typeof msg.isPublic === 'boolean' && msg.isPublic !== this.isPublic) {
+          this.isPublic = msg.isPublic;
+          this.sys(this.isPublic ? 'La sala ahora es pública: aparece en la lista de salas.' : 'La sala ahora es privada: solo se entra con el código.');
+        }
+        if (typeof msg.password === 'string') {
+          const pw = cleanText(msg.password, 20);
+          if (pw !== this.password) this.sys(pw ? 'La sala ahora tiene contraseña.' : 'La sala ya no tiene contraseña.');
+          this.password = pw;
+        }
         this.dirty = true;
         return true;
       }
@@ -703,7 +729,7 @@ export class Room {
       case 'clave': case 'password': {
         if (!me.admin) return this.tell(me.id, 'Eso lo puede hacer solo el admin.');
         act({ t: 'roomcfg', password: arg });
-        return this.tell(me.id, arg ? 'Contraseña cambiada.' : 'La sala quedó sin contraseña.');
+        return true;
       }
       default:
         return this.tell(me.id, `No conozco "/${rawCmd}". Escribí /help.`);

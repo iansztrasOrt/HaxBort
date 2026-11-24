@@ -9,7 +9,8 @@ import { botInput } from '../shared/game/bot.js';
 import { createWorld, step as physicsStep } from '../shared/physics/world.js';
 import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
 import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protocol.js';
-import { createRenderer } from './render.js';
+import { createRenderer, drawKit, drawDiscLabel } from './render.js';
+import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
 import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker } from './net.js';
 
@@ -344,7 +345,7 @@ async function doCreateRoom() {
   }
   const cfg = {
     name: $('room-name').value.trim() || `Sala de ${profile.name}`, password: $('room-pass').value.trim(),
-    maxPlayers: max, isPublic: $('room-public').checked,
+    maxPlayers: max, isPublic: $('room-privacy').value !== 'private',
   };
   const mode = $('room-mode').value;
   try {
@@ -588,6 +589,7 @@ function onNet(msg) {
         showBanner(`${msg.map.name} · ¡a jugar!`, 1300);
       }
       renderRoom();
+      if (!$('kits-modal').hidden && !Object.keys(kitDraft).length && !$('kits-panel').contains(document.activeElement)) renderKits();
       break;
     }
     case 'history':
@@ -904,7 +906,7 @@ function drawWithOffsets(m, dt = STEP_MS, alpha = 0) {
   });
   const mine = m.players.find((p) => p.id === app.me);
   try {
-    renderer.render(m, { focusId: mine && mine.team !== 'spectator' ? app.me : null, zoom: prefs.zoom, dt });
+    renderer.render(m, { focusId: mine && mine.team !== 'spectator' ? app.me : null, zoom: prefs.zoom, dt, kits: app.room?.settings?.kits || null });
   } finally {
     for (const [d, ox, oy] of applied) {
       d.x -= ox;
@@ -941,6 +943,89 @@ function submitRules(inp) {
   inp.classList.remove('bad');
   // Solo se manda el valor que cambió: si el admin cambia los dos seguido, uno no pisa al otro.
   act(isTime ? { t: 'rules', time: n } : { t: 'rules', score: n });
+}
+
+// ---- camisetas (ventana "Camisetas"; la elige el admin, todos la ven)
+const kitDraft = {}; // team → camiseta que se está editando (se manda con un poquito de demora)
+let kitTimers = {};
+function sendKit(team, kit, { live = false } = {}) {
+  kitDraft[team] = kit;
+  // Mientras se arrastra un color o el ángulo no se rearma la ventana (se cerraría el selector):
+  // solo se redibuja la vista previa.
+  if (live) updateKitPreview(team, kit);
+  else renderKits();
+  clearTimeout(kitTimers[team]);
+  kitTimers[team] = setTimeout(() => {
+    act({ t: 'kit', team, kit });
+    delete kitDraft[team];
+  }, 120);
+}
+function kitCanvas(kit, size, label = '') {
+  const c = el('canvas', { width: String(size * 2), height: String(size * 2), 'aria-hidden': 'true' });
+  const ctx = c.getContext('2d');
+  const r = size - 3;
+  drawKit(ctx, kit, size, size, r);
+  ctx.beginPath();
+  ctx.arc(size, size, r, 0, Math.PI * 2);
+  ctx.lineWidth = Math.max(2, size / 14);
+  ctx.strokeStyle = `#${kit.border}`;
+  ctx.stroke();
+  if (label) drawDiscLabel(ctx, label, size, size, r, `#${kit.text}`);
+  return c;
+}
+function updateKitPreview(team, kit) {
+  const box = document.querySelector(`#kits-panel .kit-col.${team} .kit-preview`);
+  if (!box) return;
+  const c = kitCanvas(kit, 48, (myInfo()?.avatar || '10').slice(0, 2));
+  c.style.width = '96px';
+  c.style.height = '96px';
+  box.replaceChildren(c);
+}
+function renderKits() {
+  const panel = $('kits-panel');
+  if (!panel || $('kits-modal').hidden) return;
+  const admin = Boolean(myInfo()?.admin) || app.sess?.kind === 'local';
+  $('kits-note').textContent = admin ? 'Los cambios se ven al instante para todos.' : 'Solo el admin puede cambiarlas.';
+  const sample = (myInfo()?.avatar || '10').slice(0, 2);
+  panel.replaceChildren();
+  for (const team of ['red', 'blue']) {
+    const kit = kitDraft[team] || app.room?.settings?.kits?.[team] || DEFAULT_KITS[team];
+    const current = () => kitDraft[team] || app.room?.settings?.kits?.[team] || kit;
+    const set = (patch) => {
+      const cur = current();
+      sendKit(team, { ...cur, ...patch, colors: patch.colors || cur.colors });
+    };
+    const live = (patch) => {
+      const cur = current();
+      sendKit(team, { ...cur, ...patch, colors: patch.colors || cur.colors }, { live: true });
+    };
+    const pattern = KIT_PATTERNS.find((p) => p.id === kit.pattern) || KIT_PATTERNS[0];
+    const presets = el('div', { class: 'kit-grid' }, ...KIT_PRESETS.map((p) => el('button', {
+      type: 'button', class: 'kit-opt', disabled: !admin, title: p.name, onclick: () => sendKit(team, { ...p.kit, colors: [...p.kit.colors] }),
+    }, kitCanvas(p.kit, 17), p.name)));
+    const patterns = el('div', { class: 'kit-grid' }, ...KIT_PATTERNS.map((p) => el('button', {
+      type: 'button', class: `kit-opt${p.id === kit.pattern ? ' on' : ''}`, disabled: !admin, title: p.name, 'aria-pressed': String(p.id === kit.pattern),
+      onclick: () => set({ pattern: p.id }),
+    }, kitCanvas({ ...kit, pattern: p.id }, 17), p.name)));
+    const colorInput = (label, value, onInput, off = false) => el('label', { class: off ? 'off' : '' }, label,
+      el('input', { type: 'color', value: `#${value}`, disabled: !admin, oninput: (e) => onInput(e.target.value.slice(1)) }));
+    const colors = el('div', { class: 'kit-colors' },
+      ...[0, 1, 2].map((i) => colorInput(`Color ${i + 1}`, kit.colors[i], (v) => { const cs = [...current().colors]; cs[i] = v; live({ colors: cs }); }, i >= pattern.colors)),
+      colorInput('Número', kit.text, (v) => live({ text: v })),
+      colorInput('Borde', kit.border, (v) => live({ border: v })));
+    const angleVal = el('span', { class: 'small', text: `${kit.angle}°` });
+    const angle = el('label', { class: 'kit-angle' }, 'Ángulo',
+      el('input', { type: 'range', min: '0', max: '359', step: '15', value: String(kit.angle), disabled: !admin, oninput: (e) => { angleVal.textContent = `${e.target.value}°`; live({ angle: Number(e.target.value) }); } }),
+      angleVal);
+    panel.append(el('div', { class: `kit-col ${team}` },
+      el('div', { class: 'kit-top' }, el('div', { class: 'kit-preview' }, kitCanvas(kit, 48, sample)),
+        el('div', {}, el('h3', { text: TEAM_ES[team] }), el('p', { class: 'small muted', text: `${pattern.name}` }),
+          admin ? el('button', { type: 'button', class: 'btn ghost', style: 'min-height:30px', onclick: () => { delete kitDraft[team]; act({ t: 'kit', team, reset: true }); } }, 'Restablecer') : null)),
+      el('span', { class: 'kit-sub', text: 'Modelos' }), presets,
+      el('span', { class: 'kit-sub', text: 'Diseño' }), patterns,
+      el('span', { class: 'kit-sub', text: 'Colores' }), colors, angle));
+  }
+  for (const c of panel.querySelectorAll('.kit-preview canvas')) { c.style.width = '96px'; c.style.height = '96px'; }
 }
 
 /** /extrapolation [ms | default]: ver o cambiar la extrapolación de ESTA pantalla. */
@@ -1083,7 +1168,8 @@ function renderRoom() {
     const ul = el('ul', { class: 'plist' });
     if (!list.length) ul.append(el('li', { class: 'empty', text: admin ? 'Arrastrá jugadores acá' : (team === 'spectator' ? 'Nadie mirando' : 'Sin jugadores') }));
     for (const p of list) {
-      const color = team === 'spectator' ? '#5d6b66' : TEAM_COLORS[team];
+      const kitMain = r.settings?.kits?.[team]?.colors?.[0];
+      const color = team === 'spectator' ? '#5d6b66' : (kitMain ? `#${kitMain}` : TEAM_COLORS[team]);
       const li = el('li', { class: `prow${p.id === app.me ? ' me' : ''}${p.away ? ' away' : ''}`, draggable: admin ? 'true' : null, 'data-id': p.id },
         el('span', { class: 'av', style: `background:${color}`, text: (p.avatar || '?').slice(0, 2) }),
         el('span', { class: 'nm', text: p.name, title: p.name }),
@@ -1137,6 +1223,12 @@ function renderRoom() {
   $('btn-pause').textContent = r.paused ? '▶ Seguir' : '⏸ Pausar';
   $('bot-skill').value = String(r.botSkill);
   $('bot-skill').disabled = !admin;
+  // Privacidad de la sala (Ajustes): solo para el admin de una sala online.
+  $('room-cfg').hidden = !admin || r.offline;
+  $('cfg-privacy').value = r.isPublic ? 'public' : 'private';
+  if (document.activeElement !== $('cfg-max')) $('cfg-max').value = String(r.maxPlayers);
+  $('cfg-pass').placeholder = r.hasPassword ? 'Tiene contraseña: escribí otra para cambiarla' : 'Sin contraseña';
+  $('cfg-nopass').hidden = !r.hasPassword;
   renderStateLine();
 }
 
@@ -1258,10 +1350,11 @@ function submitChat(e) {
 }
 
 // ---------------------------------------------------------------- modales
-const modalOpen = () => !$('maps-modal').hidden || !$('settings-modal').hidden;
+const modalOpen = () => !$('maps-modal').hidden || !$('settings-modal').hidden || !$('kits-modal').hidden;
 function closeModals() {
   $('maps-modal').hidden = true;
   $('settings-modal').hidden = true;
+  $('kits-modal').hidden = true;
 }
 function openMaps(tab = 'pick') {
   $('maps-modal').hidden = false;
@@ -1630,6 +1723,10 @@ function bind() {
   });
   $('btn-leave').addEventListener('click', () => leaveRoom());
   $('btn-settings').addEventListener('click', () => { $('settings-modal').hidden = false; });
+  $('btn-kits').addEventListener('click', () => {
+    $('kits-modal').hidden = false;
+    renderKits();
+  });
   $('btn-auto').addEventListener('click', () => act({ t: 'auto' }));
   $('btn-rand').addEventListener('click', () => act({ t: 'rand' }));
   $('btn-lock').addEventListener('click', () => act({ t: 'lock' }));
@@ -1655,7 +1752,7 @@ function bind() {
 
   for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => selectTab(b.dataset.tab));
   for (const b of document.querySelectorAll('[data-close]')) b.addEventListener('click', closeModals);
-  for (const m of ['maps-modal', 'settings-modal']) $(m).addEventListener('mousedown', (e) => { if (e.target === $(m)) closeModals(); });
+  for (const m of ['maps-modal', 'settings-modal', 'kits-modal']) $(m).addEventListener('mousedown', (e) => { if (e.target === $(m)) closeModals(); });
   $('file-input').addEventListener('change', (e) => {
     importFiles([...e.target.files]);
     e.target.value = '';
@@ -1687,6 +1784,22 @@ function bind() {
 
   $('zoom-range').addEventListener('input', (e) => setZoom(Number(e.target.value), true));
   $('bot-skill').addEventListener('change', (e) => act({ t: 'skill', value: Number(e.target.value) }));
+  $('cfg-privacy').addEventListener('change', (e) => act({ t: 'roomcfg', isPublic: e.target.value === 'public' }));
+  $('cfg-save').addEventListener('click', () => {
+    const max = Number($('cfg-max').value);
+    if (!Number.isInteger(max) || max < 2 || max > 30) {
+      toast('Máximo de personas: un número entero de 2 a 30.', 3000);
+      return;
+    }
+    const msg = { t: 'roomcfg', maxPlayers: max };
+    // La contraseña solo cambia si se escribió una nueva (para sacarla está el otro botón).
+    const pw = $('cfg-pass').value.trim();
+    if (pw) msg.password = pw;
+    act(msg);
+    $('cfg-pass').value = '';
+    toast('Sala actualizada.', 1500);
+  });
+  $('cfg-nopass').addEventListener('click', () => act({ t: 'roomcfg', password: '' }));
   renderBinds();
   $('keys-reset').addEventListener('click', () => {
     setKeys(DEFAULT_KEYS);
