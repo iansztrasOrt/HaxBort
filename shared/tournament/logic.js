@@ -52,7 +52,7 @@ export function cleanFormat(f, base = DEFAULT_FORMAT) {
     },
   };
   if (!out.inscripcion.equipos && !out.inscripcion.solos) fail('Tiene que haber al menos una forma de inscribirse: como equipo o solo.');
-  if (out.type === 'copa' && out.rules.time === 0 && out.rules.score === 0) fail('En copa tiene que haber un límite de tiempo o de goles (si no, un partido no termina nunca).');
+  if (out.rules.time === 0 && out.rules.score === 0) fail('Tiene que haber un límite de tiempo o de goles (si no, un partido no termina nunca).');
   return out;
 }
 
@@ -569,41 +569,10 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
     case 'cargar_resultado': { // el admin carga (o corrige) un resultado
       needAdmin();
       if (t.status === 'inscripcion') fail('El torneo todavía no empezó.');
-      const m = matchById(t, String(a.match || '')) || fail('No existe ese partido.');
       const gh = int(a.gh, 0, 99, null);
       const ga = int(a.ga, 0, 99, null);
       if (gh === null || ga === null) fail('Los goles tienen que ser números enteros de 0 a 99.');
-      const round = t.rounds.find((r) => r.matches.includes(m));
-      if (m.status === 'pendiente' && !playable(t, m)) fail('Ese partido todavía no se puede jugar: falta terminar la fecha/ronda anterior.');
-      if (t.format.type === 'copa') {
-        if (round !== t.rounds[t.rounds.length - 1]) fail('Esa ronda de la copa ya cerró: no se puede corregir.');
-        if (!t.format.idaVuelta && gh === ga && !m.desempate) fail('En copa a un partido no hay empate: el partido sigue a gol de oro.');
-        if (m.desempate && gh === ga) fail('El desempate es a gol de oro: tiene que haber un ganador.');
-        const tie = round.ties.find((x) => x.id === m.tie);
-        if (m.status !== 'pendiente' && tie) {
-          // Corrección: la llave se vuelve a definir (y se descartan los desempates si era un partido de ida/vuelta).
-          tie.winner = null;
-          if (!m.desempate) {
-            const drop = new Set(round.matches.filter((x) => x.tie === tie.id && x.desempate).map((x) => x.id));
-            round.matches = round.matches.filter((x) => !drop.has(x.id));
-            tie.matches = tie.matches.filter((id) => !drop.has(id));
-          }
-          if (t.status === 'terminado') {
-            t.status = 'en_curso';
-            t.champion = null;
-          }
-        }
-      }
-      m.gh = gh;
-      m.ga = ga;
-      m.status = 'jugado';
-      m.playedAt = now;
-      if (t.format.type === 'liga') {
-        if (t.status === 'terminado') t.status = 'en_curso';
-        t.champion = null;
-      }
-      log(t, `Resultado: ${teamById(t, m.home)?.name} ${gh} - ${ga} ${teamById(t, m.away)?.name}.`, now);
-      advance(t);
+      setResult(t, String(a.match || ''), gh, ga, now);
       return {};
     }
     default:
@@ -611,6 +580,53 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
   }
   return {};
 }
+
+/** Reglas del partido en el juego: en la liga y en la ida de una llave el empate vale;
+ *  en un partido único de copa o en un desempate se sigue a gol de oro. */
+export function matchRules(t, match) {
+  const r = t.format.rules;
+  const allowDraw = t.format.type === 'liga' || (t.format.idaVuelta && !match.desempate);
+  return { time: r.time, score: r.score, ballRadius: r.ballRadius, map: r.map, allowDraw };
+}
+
+/** Carga (o corrige) el resultado de un partido y hace avanzar el torneo. Lo usan el admin y el servidor. */
+export function setResult(t, matchId, gh, ga, now = Date.now()) {
+  const m = matchById(t, matchId) || fail('No existe ese partido.');
+  const round = t.rounds.find((r) => r.matches.includes(m));
+  if (m.status === 'pendiente' && !playable(t, m)) fail('Ese partido todavía no se puede jugar: falta terminar la fecha/ronda anterior.');
+  if (t.format.type === 'copa') {
+    if (round !== t.rounds[t.rounds.length - 1]) fail('Esa ronda de la copa ya cerró: no se puede corregir.');
+    if (!t.format.idaVuelta && gh === ga && !m.desempate) fail('En copa a un partido no hay empate: el partido sigue a gol de oro.');
+    if (m.desempate && gh === ga) fail('El desempate es a gol de oro: tiene que haber un ganador.');
+    const tie = round.ties.find((x) => x.id === m.tie);
+    if (m.status !== 'pendiente' && tie) {
+      // Corrección: la llave se vuelve a definir (y se descartan los desempates si era un partido de ida/vuelta).
+      tie.winner = null;
+      if (!m.desempate) {
+        const drop = new Set(round.matches.filter((x) => x.tie === tie.id && x.desempate).map((x) => x.id));
+        round.matches = round.matches.filter((x) => !drop.has(x.id));
+        tie.matches = tie.matches.filter((id) => !drop.has(id));
+      }
+      if (t.status === 'terminado') {
+        t.status = 'en_curso';
+        t.champion = null;
+      }
+    }
+  }
+  m.gh = gh;
+  m.ga = ga;
+  m.status = 'jugado';
+  m.playedAt = now;
+  if (t.format.type === 'liga') {
+    if (t.status === 'terminado') t.status = 'en_curso';
+    t.champion = null;
+  }
+  log(t, `Resultado: ${teamById(t, m.home)?.name} ${gh} - ${ga} ${teamById(t, m.away)?.name}.`, now);
+  advance(t);
+  return m;
+}
+
+export const findMatch = (t, id) => matchById(t, id);
 
 /** Lo que ve cualquiera (no hay secretos en el documento: los jugadores se identifican con un hash). */
 export function publicView(t, pid = null) {

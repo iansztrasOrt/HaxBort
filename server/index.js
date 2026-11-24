@@ -138,6 +138,7 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
     const e = rooms.get(code);
     if (!e || e.kind !== 'p2p') return;
     rooms.delete(code);
+    torneos.roomClosed(code); // si era un partido de torneo, se define el resultado
     for (const l of e.links) {
       const link = links.get(l);
       links.delete(l);
@@ -375,7 +376,7 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
 
   server.listen(port, () => log(`HaxBort escuchando en http://localhost:${server.address().port}`));
   return {
-    server, wss, rooms,
+    server, wss, rooms, torneos,
     close() {
       store.close().catch(() => {});
       ticker.stop();

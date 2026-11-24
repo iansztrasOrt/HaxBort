@@ -13,7 +13,7 @@ import { createRenderer, drawKit, drawDiscLabel } from './render.js';
 import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
 import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker } from './net.js';
-import { createTorneosUI } from './torneos.js';
+import { createTorneosUI, postTorneo } from './torneos.js';
 
 const $ = (id) => document.getElementById(id);
 const STEP_MS = 1000 / 60;
@@ -370,6 +370,57 @@ async function doCreateRoom() {
   }
 }
 
+// ---------------------------------------------------------------- partidos de torneo
+/** El juego eligió esta compu para correr un partido del torneo: arma la sala sola (sin admin). */
+function hostTorneoMatch(cfg) {
+  return exclusiveEntry('create', async () => {
+    try {
+      const hub = await ensureHub();
+      resetGameState();
+      const roomCfg = {
+        name: cfg.title, password: '', maxPlayers: 30, isPublic: false, selfTicket: cfg.selfTicket,
+        torneo: { code: cfg.code, match: cfg.match, session: cfg.session, title: cfg.title, home: cfg.home, away: cfg.away, tickets: cfg.tickets, rules: cfg.rules },
+      };
+      const wait = hub.wait(['hosted']);
+      hub.send({ t: 'create', mode: 'p2p', room: { name: roomCfg.name, maxPlayers: 30, isPublic: false }, name: profile.name, avatar: profile.avatar });
+      const { code } = await wait;
+      attach(new HostSession(hub, code, roomCfg, profile));
+      enterGame();
+      await postTorneo(cfg.code, { t: 'sala_creada', match: cfg.match, session: cfg.session, room: code }, profile.name);
+      return true;
+    } catch (err) {
+      toast(`No se pudo armar el partido: ${err.message}`, 4000);
+      return false;
+    }
+  });
+}
+
+/** En un partido de torneo, cada jugador informa el marcador (en cada gol y al final). */
+function reportTorneo(final) {
+  const tr = app.room?.torneo;
+  const me = myInfo();
+  if (!tr || !app.match || !me || me.team === 'spectator') return;
+  const send = () => {
+    const sc = app.match?.score;
+    if (!sc) return;
+    postTorneo(tr.code, { t: 'marcador', match: tr.match, session: tr.session, gh: sc.red, ga: sc.blue, final }, profile.name).catch(() => {});
+  };
+  setTimeout(send, 400); // la foto con el marcador nuevo llega justo después del evento
+  if (final) setTimeout(send, 2500); // por si el primero se perdió
+}
+let torneoReturnTimer = 0;
+/** Al terminar un partido de torneo se vuelve a la página del torneo (también si la sala se cierra antes). */
+function backToTorneo(code) {
+  app.torneoReturn = code;
+  clearTimeout(torneoReturnTimer);
+  torneoReturnTimer = setTimeout(() => {
+    if (app.torneoReturn !== code) return;
+    app.torneoReturn = null;
+    if (app.screen === 'game') leaveRoom({ silent: true });
+    torneos.open(code);
+  }, 8000);
+}
+
 /** Entrar a una sala (o volver a la propia con `resume`). Es idempotente: mientras hay un pedido
  *  en curso los demás clics no mandan nada, cada pedido lleva un `rid` para no mezclar respuestas
  *  viejas con nuevas, y el `clientId` de la pestaña hace que la sala devuelva el mismo jugador si
@@ -395,7 +446,7 @@ function discardLateAnswer(hub, rid) {
   setTimeout(stop, 30000);
 }
 
-async function doJoinRoom(code, { password = '', resume = null } = {}) {
+async function doJoinRoom(code, { password = '', resume = null, ticket = '' } = {}) {
   code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (code.length < 4) {
     toast('Escribí el código de 5 letras de la sala.');
@@ -414,7 +465,7 @@ async function doJoinRoom(code, { password = '', resume = null } = {}) {
     }
     const msg = resume
       ? { t: 'resume', code, id: resume.id, secret: resume.secret, rid, clientId: CLIENT_ID }
-      : { t: 'join', code, name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID };
+      : { t: 'join', code, name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID, ticket };
     hub.send(msg);
     let res;
     try {
@@ -457,7 +508,7 @@ async function doJoinRoom(code, { password = '', resume = null } = {}) {
       });
       g.send(resume
         ? { t: 'resume', id: resume.id, secret: resume.secret, rid, clientId: CLIENT_ID }
-        : { t: 'join', name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID });
+        : { t: 'join', name: profile.name, avatar: profile.avatar, password, rid, clientId: CLIENT_ID, ticket });
       w = await welcome;
       w.viaRelay = mode === 'relay';
     } catch (err) {
@@ -512,6 +563,11 @@ function leaveRoom({ silent = false } = {}) {
 async function startReconnect(reason) {
   const saved = readJSON(sessionStorage, K.session, null);
   const s = app.sess;
+  if (app.torneoReturn) { // el partido de torneo ya terminó: no hay a qué volver, se va al torneo
+    try { s?.dispose?.(); } catch { /* nada */ }
+    endSession(reason);
+    return;
+  }
   if (!saved || app.reconnecting || !s || s.kind === 'host' || s.kind === 'local') {
     endSession(reason);
     return;
@@ -538,6 +594,14 @@ function endSession(reason) {
   writeJSON(sessionStorage, K.session, null);
   resetGameState();
   $('banner').hidden = true;
+  if (app.torneoReturn) {
+    // Se cerró la sala de un partido de torneo que ya terminó: de vuelta al torneo.
+    const code = app.torneoReturn;
+    app.torneoReturn = null;
+    clearTimeout(torneoReturnTimer);
+    torneos.open(code);
+    return;
+  }
   show('lobby');
   toast(reason || 'Se terminó la sala.', 5000);
 }
@@ -656,6 +720,14 @@ function onSnapshot(buf) {
 }
 
 function onEvents(events) {
+  if (app.room?.torneo) {
+    if (events.some((e) => e.type === 'goal')) reportTorneo(false);
+    if (events.some((e) => e.type === 'end')) {
+      reportTorneo(true);
+      showBanner('Partido terminado: el resultado se carga solo en el torneo. Volviendo…', 6000);
+      backToTorneo(app.room.torneo.code);
+    }
+  }
   for (const ev of events) {
     if (ev.type === 'kick') {
       if (ev.playerId !== app.me || performance.now() - app.myKickAt > 400) beep(220, 0.05, 'triangle', 0.08);
@@ -1224,6 +1296,12 @@ function renderRoom() {
   $('btn-pause').hidden = !admin || idle;
   $('btn-stop').hidden = !admin || idle;
   $('btn-pause').textContent = r.paused ? '▶ Seguir' : '⏸ Pausar';
+  if (r.torneo) {
+    // Partido de torneo: nadie es admin; los que juegan votan la pausa (hacen falta 3).
+    const playing = myInfo()?.team && myInfo().team !== 'spectator';
+    $('btn-pause').hidden = !playing || r.torneo.state !== 'jugando';
+    $('btn-pause').textContent = `${r.paused ? '▶ Votar seguir' : '⏸ Votar pausa'} (${r.torneo.votes}/3)`;
+  }
   $('bot-skill').value = String(r.botSkill);
   $('bot-skill').disabled = !admin;
   // Privacidad de la sala (Ajustes): solo para el admin de una sala online.
@@ -1846,7 +1924,14 @@ async function checkVersion() {
 
 async function init() {
   checkVersion();
-  torneos = createTorneosUI({ $, el, toast, getProfile: () => profile, show, maps: BUILTIN_MAPS.map((m) => ({ id: m.id, name: m.name })) });
+  torneos = createTorneosUI({
+    $, el, toast, getProfile: () => profile, show, maps: BUILTIN_MAPS.map((m) => ({ id: m.id, name: m.name })),
+    hostMatch: (cfg) => hostTorneoMatch(cfg),
+    joinMatch: ({ room, ticket }) => joinRoom(room, { ticket }),
+    watchMatch: (room) => joinRoom(room),
+    inRoom: () => (app.screen === 'game' ? (app.sess?.code || app.room?.code || null) : null),
+    busy: () => Boolean(entering),
+  });
   bind();
   setupTouch();
   setZoom(prefs.zoom, true);

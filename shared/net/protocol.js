@@ -53,7 +53,7 @@ export function snapshotBody(m, { paused = false } = {}) {
   const meta = {
     k: m.tick, ph: m.phase, ko: m.kickoffTeam, sc: [m.score.red, m.score.blue], t: m.ticks, ot: m.overtime ? 1 : 0,
     pt: m.phaseTimer, lg: m.lastGoal, w: m.winner, lt: m.lastTouch, pa: paused ? 1 : 0,
-    st: [m.settings.timeLimit, m.settings.scoreLimit, m.settings.kickCooldown],
+    st: [m.settings.timeLimit, m.settings.scoreLimit, m.settings.kickCooldown, m.settings.allowDraw ? 1 : 0],
     p: m.players.map((p) => [p.id, TEAM_CODE[p.team] ?? 0, p.input, (p.kickHeld ? 1 : 0) | (p.kicking ? 2 : 0), p.cooldown, p.goals,
       p.disc ? index.get(p.disc) ?? -1 : -1]),
     n: discs.length,
@@ -116,7 +116,7 @@ export function applySnapshot(m, snap, names = new Map()) {
   m.lastGoal = meta.lg;
   m.winner = meta.w;
   m.lastTouch = meta.lt;
-  m.settings = { timeLimit: meta.st[0], scoreLimit: meta.st[1], kickCooldown: meta.st[2] };
+  m.settings = { timeLimit: meta.st[0], scoreLimit: meta.st[1], kickCooldown: meta.st[2], allowDraw: Boolean(meta.st[3]) };
 
   const old = new Map(m.players.map((p) => [p.id, p]));
   const base = m.world.discs.slice(0, m.mapDiscCount);

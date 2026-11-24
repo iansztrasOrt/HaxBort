@@ -26,6 +26,8 @@ const QUEUE_EXCESS = 2;
 const QUEUE_HARD = 12;
 const HISTORY = 40;
 const TEAMS = ['red', 'blue', 'spectator'];
+// En un partido de torneo nadie puede hacer esto (ni el que corre la sala en su compu).
+const TORNEO_BLOCKED = new Set(['team', 'start', 'stop', 'rules', 'map', 'kit', 'roomcfg', 'bot', 'clearteam', 'pullnext', 'kick', 'admin', 'reset', 'rand', 'auto', 'lock', 'skill']);
 const TEAM_ES = { red: 'Rojo', blue: 'Azul', spectator: 'Espectadores' };
 const BOT_NAMES = ['Ramona', 'Tito', 'Chiqui', 'Pocho', 'Mirta', 'Coco', 'Beba', 'Tano', 'Nené', 'Toto', 'Cacho', 'Pirucha', 'Lalo', 'Pipa', 'Kuka', 'Fito'];
 
@@ -55,7 +57,7 @@ const randomId = () => Math.random().toString(36).slice(2, 10);
 const randomSecret = () => Array.from({ length: 4 }, randomId).join('');
 
 export class Room {
-  constructor({ code, name, password = '', maxPlayers = 10, isPublic = true, offline = false } = {}, transport) {
+  constructor({ code, name, password = '', maxPlayers = 10, isPublic = true, offline = false, torneo = null } = {}, transport) {
     this.code = code;
     this.name = cleanText(name, 32) || 'Sala de HaxBort';
     this.password = cleanText(password, 20);
@@ -76,6 +78,86 @@ export class Room {
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
     this.setBuiltinMap('clasica');
+    this.torneo = null;
+    if (torneo) this.setupTorneo(torneo);
+  }
+
+  // ---------------------------------------------------------------- partido de torneo
+  /**
+   * Modo torneo: la sala la arma el juego para un partido del fixture. Nadie es admin, cada
+   * jugador entra a su equipo con su "ticket", el partido arranca solo cuando están todos (o al
+   * minuto, si hay al menos uno por equipo), solo se pausa con 3 votos y nadie lo puede terminar.
+   */
+  setupTorneo(cfg) {
+    const kit = (k, team) => cleanKit(k, DEFAULT_KITS[team]) || { ...DEFAULT_KITS[team] };
+    const tickets = {};
+    for (const [ticket, info] of Object.entries(cfg.tickets || {})) {
+      if (typeof ticket === 'string' && ticket.length >= 8 && info && (info.team === 'red' || info.team === 'blue')) tickets[ticket] = { team: info.team, pid: String(info.pid || '') };
+    }
+    const rules = cfg.rules || {};
+    this.torneo = {
+      code: cleanText(cfg.code, 8), match: cleanText(cfg.match, 12), session: cleanText(cfg.session, 32), title: cleanText(cfg.title, 60),
+      home: { name: cleanText(cfg.home?.name, 24) || 'Local' }, away: { name: cleanText(cfg.away?.name, 24) || 'Visitante' },
+      tickets, allowDraw: Boolean(rules.allowDraw), state: 'esperando', wait: 0, pauseTicks: 0, votes: new Set(),
+    };
+    const r = validRules({ time: rules.time, score: rules.score, ball: rules.ballRadius ?? null }, this.settings);
+    if (!r.error) {
+      this.settings.timeLimit = r.time;
+      this.settings.scoreLimit = r.score;
+      this.settings.ballRadius = r.ball;
+    }
+    this.settings.kits = { red: kit(cfg.home?.kit, 'red'), blue: kit(cfg.away?.kit, 'blue') };
+    if (typeof rules.map === 'string' && BUILTIN_MAPS.some((b) => b.id === rules.map)) this.setBuiltinMap(rules.map);
+    else this.rebuildMatch();
+    this.locked = true;
+    this.isPublic = false;
+  }
+
+  /** Cada tick: arranque automático, fin de la pausa larga. */
+  stepTorneo() {
+    const t = this.torneo;
+    if (t.state === 'esperando') {
+      t.wait += 1;
+      const tickets = Object.keys(t.tickets);
+      const here = (team) => [...this.members.values()].filter((m) => m.connected && m.team === team).length;
+      const all = tickets.length > 0 && tickets.every((tk) => [...this.members.values()].some((m) => m.ticket === tk && m.connected));
+      // Todos adentro: arranca a los 3 segundos. Si falta alguien, al minuto (con uno por equipo, como mínimo).
+      if ((all && t.wait >= 3 * TICK_RATE) || (t.wait >= 60 * TICK_RATE && here('red') && here('blue'))) {
+        t.state = 'jugando';
+        this.start();
+        this.sys(`¡Arranca el partido! ${t.home.name} vs ${t.away.name}.`);
+      }
+    } else if (t.state === 'jugando' && this.paused) {
+      t.pauseTicks += 1;
+      if (t.pauseTicks >= 60 * TICK_RATE) {
+        this.paused = false;
+        t.votes.clear();
+        this.dirty = true;
+        this.sys('Pasó un minuto: sigue el partido.');
+      }
+    }
+  }
+
+  /** Voto para pausar (o seguir): hacen falta 3 jugadores. */
+  votePause(me) {
+    const t = this.torneo;
+    if (me.team === 'spectator') return this.tell(me.id, 'Solo los que juegan pueden votar la pausa.');
+    if (t.state !== 'jugando' || this.match.phase === 'ended') return this.tell(me.id, 'Ahora no se puede pausar.');
+    const players = [...this.members.values()].filter((m) => !m.bot && m.connected && m.team !== 'spectator').length;
+    if (players < 3) return this.tell(me.id, 'Para pausar hacen falta 3 votos y en este partido hay menos de 3 jugadores.');
+    if (t.votes.has(me.id)) t.votes.delete(me.id);
+    else t.votes.add(me.id);
+    if (t.votes.size >= 3) {
+      this.paused = !this.paused;
+      t.votes.clear();
+      t.pauseTicks = 0;
+      this.dirty = true;
+      this.sys(this.paused ? 'Partido pausado (3 votos). Sigue con 3 votos o solo en un minuto.' : 'Sigue el partido (3 votos).');
+    } else {
+      this.dirty = true;
+      this.sys(`${me.name} vota ${this.paused ? 'seguir' : 'pausar'} (${t.votes.size}/3).`);
+    }
+    return true;
   }
 
   // ---------------------------------------------------------------- miembros
@@ -92,9 +174,23 @@ export class Room {
    *  `clientId` identifica a la pestaña que pide entrar: si ya tiene un lugar en la sala (pedido
    *  repetido, reintento después de un error de red, recarga), se le devuelve ESE lugar en vez de
    *  crear otro jugador. Así una persona nunca aparece dos veces. */
-  addMember({ name, avatar, password = '', ip = '', clientId = '' }) {
+  addMember({ name, avatar, password = '', ip = '', clientId = '', ticket = '' }) {
     if (ip && this.banned.has(ip)) return { ok: false, error: 'banned' };
     const cid = typeof clientId === 'string' ? clientId.slice(0, 40) : '';
+    const tk = this.torneo && typeof ticket === 'string' && this.torneo.tickets[ticket] ? ticket : '';
+    if (tk) {
+      // El mismo jugador del torneo (aunque sea desde otra pestaña) recupera su lugar.
+      const same = [...this.members.values()].find((x) => !x.bot && x.ticket === tk);
+      if (same) {
+        same.connected = true;
+        same.awayTicks = 0;
+        same.queue = [];
+        if (cid) same.clientId = cid;
+        this.dirty = true;
+        this.touch();
+        return { ok: true, id: same.id, secret: same.secret, member: same, rejoin: true };
+      }
+    }
     if (cid) {
       const same = [...this.members.values()].find((x) => !x.bot && x.clientId === cid);
       if (same) {
@@ -118,11 +214,12 @@ export class Room {
     for (let i = 2; taken.has(norm(nick)); i += 1) nick = `${cleanName(name).slice(0, 17) || 'Jugador'} ${i}`;
     const m = {
       id: `p${++this.seq}${randomId().slice(0, 4)}`, secret: randomSecret(), name: nick, avatar: cleanAvatar(avatar) || nick.slice(0, 1).toUpperCase(),
-      team: 'spectator', admin: !this.humans().length, bot: false, joinedAt: this.seq, waitSince: this.nextWait(), connected: true, awayTicks: 0,
-      queue: [], lastSeq: 0, bits: 0, ping: null, ip, chatTimes: [], clientId: cid,
+      team: 'spectator', admin: !this.torneo && !this.humans().length, bot: false, joinedAt: this.seq, waitSince: this.nextWait(), connected: true, awayTicks: 0,
+      queue: [], lastSeq: 0, bits: 0, ping: null, ip, chatTimes: [], clientId: cid, ticket: tk,
     };
     this.members.set(m.id, m);
     addPlayer(this.match, { id: m.id, name: m.name, avatar: m.avatar, team: 'spectator' });
+    if (tk) this.moveTo(m.id, this.torneo.tickets[tk].team);
     this.touch();
     return { ok: true, id: m.id, secret: m.secret, member: m };
   }
@@ -219,6 +316,10 @@ export class Room {
     return {
       t: 'room', code: this.code, name: this.name, isPublic: this.isPublic, hasPassword: Boolean(this.password), maxPlayers: this.maxPlayers,
       locked: this.locked, paused: this.paused, phase: this.match.phase, settings: this.settings, botSkill: this.botSkill,
+      torneo: this.torneo ? {
+        code: this.torneo.code, match: this.torneo.match, session: this.torneo.session, title: this.torneo.title,
+        home: this.torneo.home, away: this.torneo.away, state: this.torneo.state, votes: this.torneo.votes.size,
+      } : null,
       map: { key: this.map.key, name: this.map.name, tuned: this.map.tuned }, offline: this.offline,
       players: [...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt).map((m) => ({
         id: m.id, name: m.name, avatar: m.avatar, team: m.team, admin: m.admin, bot: m.bot, ping: m.ping, away: !m.connected, wait: m.waitSince,
@@ -328,6 +429,7 @@ export class Room {
   start() {
     this.match.settings.timeLimit = this.settings.timeLimit;
     this.match.settings.scoreLimit = this.settings.scoreLimit;
+    this.match.settings.allowDraw = Boolean(this.torneo?.allowDraw);
     startMatch(this.match);
     this.paused = false;
     this.endTimer = 0;
@@ -392,6 +494,7 @@ export class Room {
       }
       this.consumeInput(m);
     }
+    if (this.torneo) this.stepTorneo();
     const phase = this.match.phase;
     if (!this.paused && phase !== 'idle') {
       for (const m of this.members.values()) {
@@ -436,7 +539,12 @@ export class Room {
         out.push({ ...ev, scorerName: scorer?.name || null });
         this.broadcast(msg);
       } else if (ev.type === 'end') {
-        this.endTimer = END_DELAY_TICKS;
+        if (this.torneo) {
+          // Partido de torneo: queda terminado (no se vuelve a jugar en esta sala).
+          this.torneo.state = 'terminado';
+          this.paused = false;
+          this.dirty = true;
+        } else this.endTimer = END_DELAY_TICKS;
         const txt = ev.winner ? `Ganó ${TEAM_ES[ev.winner]} ${this.match.score.red} a ${this.match.score.blue}.` : 'Terminó el partido.';
         this.sys(txt);
         out.push(ev);
@@ -455,6 +563,10 @@ export class Room {
     const admin = me.admin;
     const deny = () => this.tell(id, 'Eso lo puede hacer solo el admin.');
     const idle = this.match.phase === 'idle';
+    if (this.torneo) {
+      if (msg.t === 'pausevote' || msg.t === 'pause') return this.votePause(me);
+      if (TORNEO_BLOCKED.has(msg.t)) return this.tell(id, 'En un partido de torneo nadie puede cambiar eso: lo organiza el juego.');
+    }
     switch (msg.t) {
       case 'chat':
         return this.chat(me, msg.text);

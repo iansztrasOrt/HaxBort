@@ -8,7 +8,7 @@
 // en el torneo solo queda un hash de esa clave, así que nadie puede hacerse pasar por otro.
 
 import crypto from 'node:crypto';
-import { createTorneo, applyAction, publicView, newCode, TorneoError } from '../shared/tournament/logic.js';
+import { createTorneo, applyAction, publicView, newCode, TorneoError, findMatch, playable, teamById, matchRules, setResult } from '../shared/tournament/logic.js';
 
 // ---------------------------------------------------------------- guardado
 export class MemoryStore {
@@ -156,6 +156,201 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
     });
   }
 
+  // ---------------------------------------------------------------- partidos en vivo (en memoria)
+  // Quién está listo, quién corre el partido, el marcador y los resultados que mandan los jugadores.
+  // No va a la base: es del momento (si el servidor se reinicia, los jugadores vuelven a tocar "Listo").
+  const READY_TTL = 12000; // "listo" vence si no se renueva (la página lo renueva cada 4 s)
+  const CREATE_TIMEOUT = 25000; // el elegido para correr el partido tiene este tiempo para armar la sala
+  const SINGLE_REPORT_WAIT = 60000; // si solo un jugador mandó el resultado final, se espera esto
+  const live = new Map(); // code → Map(matchId → estado)
+  const token = (n = 12) => crypto.randomBytes(n).toString('hex');
+
+  function liveOf(code, matchId, create = false) {
+    let byMatch = live.get(code);
+    if (!byMatch && create) live.set(code, (byMatch = new Map()));
+    let L = byMatch?.get(matchId);
+    if (!L && create) byMatch.set(matchId, (L = { ready: new Map(), session: null, reports: new Map(), score: null, excluded: new Set(), dispute: false }));
+    return L || null;
+  }
+  function participants(t, m) {
+    const home = teamById(t, m.home)?.members || [];
+    const away = teamById(t, m.away)?.members || [];
+    return { home, away, all: [...home, ...away] };
+  }
+  /** Limpia lo vencido y, si están todos listos, arma la sesión (elige quién corre el partido). */
+  function tick(t) {
+    const byMatch = live.get(t.code);
+    if (!byMatch) return;
+    const now = Date.now();
+    for (const [id, L] of byMatch) {
+      const m = findMatch(t, id);
+      if (!m || m.status !== 'pendiente') {
+        byMatch.delete(id);
+        continue;
+      }
+      for (const [pid, r] of L.ready) if (now - r.at > READY_TTL) L.ready.delete(pid);
+      if (L.session?.state === 'creando' && now - L.session.createdAt > CREATE_TIMEOUT) {
+        L.excluded.add(L.session.host); // no pudo armar la sala: la próxima la arma otro
+        L.session = null;
+      }
+      if (!L.session && playable(t, m)) {
+        const { all } = participants(t, m);
+        if (all.length && all.every((pid) => L.ready.has(pid))) {
+          const candidates = all.filter((pid) => !L.excluded.has(pid));
+          const pool = candidates.length ? candidates : all;
+          // El de mejor conexión (menos demora con el servidor) corre el partido.
+          const host = pool.reduce((best, pid) => ((L.ready.get(pid).rtt ?? 9999) < (L.ready.get(best).rtt ?? 9999) ? pid : best), pool[0]);
+          const tickets = {};
+          const ticketOf = {};
+          const { home } = participants(t, m);
+          for (const pid of all) {
+            const tk = token();
+            tickets[tk] = { pid, team: home.includes(pid) ? 'red' : 'blue' };
+            ticketOf[pid] = tk;
+          }
+          L.session = { id: token(8), host, tickets, ticketOf, room: null, createdAt: now, state: 'creando' };
+          L.reports.clear();
+          L.score = null;
+          L.dispute = false;
+          log(`[torneo] ${t.code} partido ${id}: lo corre ${t.players[host]?.name || host}`);
+        }
+      }
+      if (L.pendingSince && now - L.pendingSince > SINGLE_REPORT_WAIT) resolve(t.code, id, { force: true });
+    }
+  }
+  /** Lo que cada uno ve de los partidos en vivo (el ticket propio y, al elegido, la configuración). */
+  function liveView(t, pid) {
+    const out = {};
+    const byMatch = live.get(t.code);
+    if (!byMatch) return out;
+    for (const [id, L] of byMatch) {
+      const m = findMatch(t, id);
+      if (!m) continue;
+      const s = L.session;
+      const v = { ready: [...L.ready.keys()], state: s?.state || null, room: s?.room || null, host: s?.host || null, score: L.score, dispute: L.dispute };
+      if (s && pid && s.ticketOf[pid]) v.myTicket = s.ticketOf[pid];
+      if (s && pid === s.host) {
+        const home = teamById(t, m.home);
+        const away = teamById(t, m.away);
+        const round = t.rounds.find((r) => r.matches.includes(m));
+        v.hostConfig = {
+          code: t.code, match: id, session: s.id, selfTicket: s.ticketOf[pid], tickets: s.tickets,
+          title: `${t.name} · ${round?.name || ''}${m.desempate ? ' (desempate)' : m.leg === 2 ? ' (vuelta)' : m.leg === 1 && t.format.idaVuelta ? ' (ida)' : ''}`,
+          home: { name: home?.name, kit: home?.kit }, away: { name: away?.name, kit: away?.kit }, rules: matchRules(t, m),
+        };
+      }
+      out[id] = v;
+    }
+    return out;
+  }
+  const view = (doc, pid) => {
+    tick(doc);
+    return { ...publicView(doc, pid), live: liveView(doc, pid) };
+  };
+
+  /** Acciones del momento (no se guardan en la base). Devuelve null si no es una de estas. */
+  function liveAction(doc, pid, a) {
+    if (!a || !['listo', 'sala_creada', 'marcador'].includes(a.t)) return null;
+    const m = findMatch(doc, String(a.match || ''));
+    if (!m) throw new TorneoError('No existe ese partido.');
+    const { all } = participants(doc, m);
+    if (!all.includes(pid)) throw new TorneoError('No jugás ese partido.');
+    const L = liveOf(doc.code, m.id, true);
+    if (a.t === 'listo') {
+      if (!playable(doc, m)) throw new TorneoError('Ese partido todavía no se puede jugar.');
+      if (a.on === false) L.ready.delete(pid);
+      else L.ready.set(pid, { at: Date.now(), rtt: Number.isFinite(Number(a.rtt)) ? Math.max(0, Math.min(5000, Number(a.rtt))) : null });
+      tick(doc);
+      return {};
+    }
+    const s = L.session;
+    if (a.t === 'sala_creada') {
+      if (!s || s.id !== a.session || s.host !== pid) throw new TorneoError('Esa partida ya no está.');
+      s.room = String(a.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+      s.state = 'jugando';
+      roomIndex.set(s.room, { code: doc.code, match: m.id });
+      return {};
+    }
+    // marcador: lo manda cada jugador en cada gol y al final (red = local, blue = visitante)
+    const gh = Number(a.gh);
+    const ga = Number(a.ga);
+    if (!Number.isInteger(gh) || !Number.isInteger(ga) || gh < 0 || ga < 0 || gh > 99 || ga > 99) throw new TorneoError('Marcador inválido.');
+    if (a.final) {
+      L.reports.set(pid, { gh, ga, at: Date.now() });
+      resolve(doc.code, m.id);
+    } else if (!L.score || gh + ga >= L.score[0] + L.score[1]) L.score = [gh, ga];
+    return {};
+  }
+
+  /** ¿Ya se puede cargar el resultado? Dos jugadores que coinciden, o uno solo después de esperar. */
+  function resolve(code, matchId, { force = false, fromClose = false } = {}) {
+    const L = liveOf(code, matchId);
+    if (!L || L.resolving) return;
+    const groups = new Map();
+    for (const [pid, r] of L.reports) {
+      const k = `${r.gh}-${r.ga}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(pid);
+    }
+    let result = null;
+    if (groups.size > 1) {
+      L.dispute = true; // no coinciden: lo resuelve el admin cargando el resultado a mano
+      L.pendingSince = null;
+      return;
+    }
+    if (groups.size === 1) {
+      const [k, pids] = [...groups][0];
+      if (pids.length >= 2 || force || fromClose) result = k.split('-').map(Number);
+      else if (!L.pendingSince) L.pendingSince = Date.now();
+    } else if (fromClose && L.score && L.session?.state === 'jugando') {
+      result = L.score; // se cortó sin final: gana el que iba ganando
+    }
+    if (!result) {
+      if (fromClose) { // se cortó antes de empezar o sin marcador: se vuelve a armar
+        L.session = null;
+        L.ready.clear();
+      }
+      return;
+    }
+    L.resolving = true;
+    mutate(code, (doc) => {
+      const m = findMatch(doc, matchId);
+      if (!m || m.status !== 'pendiente') return null;
+      try {
+        setResult(doc, matchId, result[0], result[1]);
+        return { ok: true };
+      } catch (e) {
+        if (e instanceof TorneoError) return { replay: true }; // p. ej. empate en copa a un partido: se juega de nuevo
+        throw e;
+      }
+    }).then((out) => {
+      L.resolving = false;
+      if (out?.result?.replay) {
+        L.session = null;
+        L.ready.clear();
+        L.reports.clear();
+        L.score = null;
+        L.pendingSince = null;
+      } else live.get(code)?.delete(matchId);
+      if (out?.result?.ok) log(`[torneo] ${code} partido ${matchId}: ${result[0]}-${result[1]}`);
+    }).catch((e) => {
+      L.resolving = false;
+      console.error('[torneos] no se pudo guardar un resultado', e.message);
+    });
+  }
+
+  const roomIndex = new Map(); // código de sala → { code, match }
+  /** La sala de un partido se cerró (se fue quien la corría, o terminó). */
+  function roomClosed(roomCode) {
+    const ref = roomIndex.get(roomCode);
+    if (!ref) return;
+    roomIndex.delete(roomCode);
+    const L = liveOf(ref.code, ref.match);
+    if (!L || L.session?.room !== roomCode) return;
+    resolve(ref.code, ref.match, { fromClose: true });
+    if (L.session?.room === roomCode) L.session = null;
+  }
+
   /** Devuelve true si atendió el pedido. */
   async function handle(req, res, url, ip) {
     if (!url.pathname.startsWith('/api/torneos')) return false;
@@ -174,7 +369,7 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
           const doc = createTorneo({ code: c, name: body.name, owner: pid, ownerName: body.playerName, format: body.format });
           if (await store.insert(c, doc)) {
             log(`[torneo] ${c} creado (${doc.format.type})`);
-            return json(res, 200, { ok: true, code: c, torneo: publicView(doc, pid) }), true;
+            return json(res, 200, { ok: true, code: c, torneo: view(doc, pid) }), true;
           }
         }
         return json(res, 503, { error: 'No se pudo crear el torneo. Probá de nuevo.' }), true;
@@ -183,15 +378,21 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
         if (req.method === 'GET') {
           const row = await store.get(code);
           if (!row) return json(res, 404, { error: `No existe el torneo ${code}.` }), true;
-          return json(res, 200, { ok: true, torneo: publicView(row.doc, pid) }), true;
+          return json(res, 200, { ok: true, torneo: view(row.doc, pid) }), true;
         }
         if (req.method === 'POST') {
           if (!pid) return json(res, 400, { error: 'Falta tu identificación (recargá la página).' }), true;
           if (!canAct(ip)) return json(res, 429, { error: 'Demasiados pedidos seguidos: esperá un momento.' }), true;
           const body = await readBody(req);
+          if (['listo', 'sala_creada', 'marcador'].includes(body.action?.t)) {
+            const row = await store.get(code);
+            if (!row) return json(res, 404, { error: `No existe el torneo ${code}.` }), true;
+            const result = liveAction(row.doc, pid, body.action);
+            return json(res, 200, { ok: true, result, torneo: view(row.doc, pid) }), true;
+          }
           const out = await mutate(code, (doc) => applyAction(doc, { pid, name: body.playerName }, body.action));
           if (out.notFound) return json(res, 404, { error: `No existe el torneo ${code}.` }), true;
-          return json(res, 200, { ok: true, result: out.result || {}, torneo: publicView(out.doc, pid) }), true;
+          return json(res, 200, { ok: true, result: out.result || {}, torneo: view(out.doc, pid) }), true;
         }
       }
       json(res, 404, { error: 'No existe.' });
@@ -214,5 +415,5 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
       .catch((e) => console.error(`[torneos] no se pudo conectar a la base: ${e.message}`));
   }
 
-  return { handle, store, warm };
+  return { handle, store, warm, roomClosed };
 }

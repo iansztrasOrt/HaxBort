@@ -403,7 +403,7 @@ class HostLink {
         this.send({ t: 'error', code: 'expired', text: 'Tu lugar en la sala ya no está guardado.', rid });
         return;
       }
-      const res = room.addMember({ name: msg.name, avatar: msg.avatar, password: msg.password, ip: '', clientId: msg.clientId });
+      const res = room.addMember({ name: msg.name, avatar: msg.avatar, password: msg.password, ip: '', clientId: msg.clientId, ticket: msg.ticket });
       if (!res.ok) {
         const text = { full: 'La sala está llena.', password: 'Esta sala tiene contraseña.', bad_password: 'La contraseña no es correcta.', banned: 'No podés entrar a esta sala.' }[res.error];
         this.send({ t: 'error', code: res.error, text: text || 'No se pudo entrar.', rid });
@@ -479,7 +479,7 @@ export class HostSession extends LocalRoomBase {
     this.code = code;
     this.links = new Map(); // link → HostLink
     this.byMember = new Map(); // memberId → HostLink
-    this.room = new Room({ code, name: cfg.name, password: cfg.password, maxPlayers: cfg.maxPlayers, isPublic: cfg.isPublic }, {
+    this.room = new Room({ code, name: cfg.name, password: cfg.password, maxPlayers: cfg.maxPlayers, isPublic: cfg.isPublic, torneo: cfg.torneo || null }, {
       send: (id, msg) => {
         if (id === this.selfId) this.deliver(msg);
         else this.byMember.get(id)?.send(msg);
@@ -494,7 +494,7 @@ export class HostSession extends LocalRoomBase {
         setTimeout(() => link.close(), 300);
       },
     });
-    this.selfId = this.room.addMember({ ...profile, password: cfg.password }).id;
+    this.selfId = this.room.addMember({ ...profile, password: cfg.password, ticket: cfg.selfTicket || '' }).id;
     this.offs = [
       hub.on('guest', (m) => this.links.set(m.link, new HostLink(this, m.link))),
       hub.on('signal', (m) => this.links.get(m.link)?.onSignal(m.data || {})),

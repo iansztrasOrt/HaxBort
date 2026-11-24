@@ -44,15 +44,28 @@ function forgetMine(code) {
   } catch { /* nada */ }
 }
 
+/** Para avisar cosas del partido desde el juego (marcador, sala armada). */
+export async function postTorneo(code, action, playerName) {
+  const key = myKey();
+  const res = await fetch(`/api/torneos/${code}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...(key ? { 'x-hax-key': key } : {}) },
+    body: JSON.stringify({ action, playerName }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) throw new Error(data?.error || 'No se pudo avisar al torneo.');
+  return data;
+}
+
 const STATUS_ES = { inscripcion: 'Inscripción abierta', en_curso: 'En juego', terminado: 'Terminado' };
 
-export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
-  const state = { code: null, t: null, tab: null, timer: 0, busy: false, error: null };
+export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatch, joinMatch, watchMatch, inRoom, busy }) {
+  const state = { code: null, t: null, tab: null, timer: 0, busy: false, error: null, readyFor: null, rtt: null, handled: new Set() };
   const root = () => $('torneos-body');
 
   // ---------------------------------------------------------------- servidor
   async function api(path, body) {
     const key = myKey();
+    const t0 = performance.now();
     const res = await fetch(`/api/torneos${path}`, {
       method: body ? 'POST' : 'GET',
       headers: { 'content-type': 'application/json', ...(key ? { 'x-hax-key': key } : {}) },
@@ -64,6 +77,9 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
       data = await res.json();
     } catch { /* nada */ }
     if (!res.ok || !data?.ok) throw new Error(data?.error || 'No se pudo conectar con el servidor.');
+    // Demora con el servidor: sirve para elegir qué compu corre cada partido (la de mejor conexión).
+    const ms = performance.now() - t0;
+    state.rtt = state.rtt === null ? ms : state.rtt * 0.7 + ms * 0.3;
     return data;
   }
 
@@ -87,17 +103,85 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
   async function load() {
     if (!state.code) return;
     try {
-      const data = await api(`/${state.code}`);
+      // Si estoy "listo" para un partido, cada consulta lo renueva (si cierro la página, vence solo).
+      const data = state.readyFor
+        ? await api(`/${state.code}`, { action: { t: 'listo', match: state.readyFor, rtt: Math.round(state.rtt ?? 300) } })
+        : await api(`/${state.code}`);
       state.error = null;
       const changed = JSON.stringify(data.torneo) !== JSON.stringify(state.t);
       state.t = data.torneo;
       if (state.t.me && involved(state.t)) rememberMine(state.t);
       // No se redibuja mientras escribís en un campo (perderías lo que estás escribiendo).
       if (changed && !editing()) render();
+      autoPlay();
     } catch (e) {
+      if (state.readyFor && /no se puede jugar|No jugás|No existe ese partido/.test(e.message)) state.readyFor = null;
       state.error = e.message;
       if (!state.t) render();
     }
+  }
+
+  // ---------------------------------------------------------------- jugar
+  /** Mi partido de la fecha/ronda actual (si tengo uno sin jugar). */
+  function myMatch(t) {
+    const mt = myTeam(t);
+    if (!mt || t.status !== 'en_curso' || t.currentRound < 0) return null;
+    return t.rounds[t.currentRound].matches.find((m) => m.status === 'pendiente' && (m.home === mt.id || m.away === mt.id)) || null;
+  }
+  /** Cuando el juego arma el partido: si me toca correrlo, armo la sala; si no, entro con mi ticket. */
+  function autoPlay() {
+    const t = state.t;
+    if (!t || $('scr-torneos').hidden || busy()) return;
+    const m = myMatch(t);
+    const lv = m && t.live?.[m.id];
+    if (!lv?.myTicket) return;
+    if (lv.hostConfig && lv.state === 'creando' && !state.handled.has(`host:${lv.hostConfig.session}`)) {
+      state.handled.add(`host:${lv.hostConfig.session}`);
+      state.readyFor = null;
+      toast('¡Están todos! Armando el partido en tu compu…', 2500);
+      hostMatch(lv.hostConfig);
+    } else if (lv.state === 'jugando' && lv.room && lv.host !== t.me && inRoom() !== lv.room && !state.handled.has(`join:${lv.room}`)) {
+      state.handled.add(`join:${lv.room}`);
+      state.readyFor = null;
+      toast('¡Están todos! Entrando al partido…', 2500);
+      joinMatch({ room: lv.room, ticket: lv.myTicket });
+    }
+  }
+  async function setReady(m, on) {
+    state.readyFor = on ? m.id : null;
+    await act({ t: 'listo', match: m.id, on, rtt: Math.round(state.rtt ?? 300) });
+    autoPlay();
+  }
+  function renderMyMatch(t) {
+    const m = myMatch(t);
+    if (!m) return null;
+    const lv = t.live?.[m.id] || { ready: [] };
+    const round = t.rounds[t.currentRound];
+    const home = teamById(t, m.home);
+    const away = teamById(t, m.away);
+    const amReady = lv.ready.includes(t.me);
+    if (amReady && !state.readyFor) state.readyFor = m.id; // (p. ej. después de recargar)
+    const people = (team) => el('ul', { class: 'tready' }, ...team.members.map((pid) => el('li', { class: lv.ready.includes(pid) ? 'on' : '' },
+      el('span', { class: 'dotr', 'aria-hidden': 'true' }), `${playerName(t, pid)}${pid === t.me ? ' (vos)' : ''}`, el('span', { class: 'meta', text: lv.ready.includes(pid) ? 'listo' : 'esperando' }))));
+    const total = home.members.length + away.members.length;
+    let status;
+    let action = null;
+    if (lv.state === 'creando') status = lv.host === t.me ? 'Armando el partido en tu compu…' : `Armando el partido en la compu de ${playerName(t, lv.host)}…`;
+    else if (lv.state === 'jugando') {
+      status = 'El partido está en juego.';
+      if (lv.room && inRoom() !== lv.room) action = el('button', { type: 'button', class: 'btn go', onclick: () => joinMatch({ room: lv.room, ticket: lv.myTicket }) }, 'Entrar al partido');
+    } else {
+      status = `${lv.ready.length} de ${total} listos. Cuando estén todos, el partido arranca solo.`;
+      action = el('button', { type: 'button', class: `btn ${amReady ? 'ghost' : 'go big'}`, onclick: () => setReady(m, !amReady) }, amReady ? 'Ya no estoy listo' : '✓ Estoy listo');
+    }
+    return el('div', { class: 'tmy' },
+      el('div', { class: 'tmy-head' }, el('h3', { text: `Tu partido · ${round.name}${m.desempate ? ' (desempate)' : m.leg === 2 ? ' (vuelta)' : ''}` }),
+        lv.dispute ? el('span', { class: 'tbadge', text: 'Resultados distintos: lo carga el admin' }) : null),
+      el('div', { class: 'tmy-teams' },
+        el('div', {}, teamTag(t, m.home), people(home)),
+        el('div', { class: 'tmy-vs', text: lv.score ? `${lv.score[0]} - ${lv.score[1]}` : 'vs' }),
+        el('div', {}, teamTag(t, m.away), people(away))),
+      el('p', { class: 'small muted', text: status }), action);
   }
   const editing = () => {
     const a = document.activeElement;
@@ -273,7 +357,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
     }, label)));
     const panel = el('div', { class: 'tpanel' });
     ({ anotarse: renderSignup, tabla: t.format.type === 'liga' ? renderTable : renderBracket, partidos: renderMatches, equipos: renderTeams, admin: renderAdmin })[state.tab](t, panel);
-    body.replaceChildren(...[head, champion, nav, panel, renderLog(t)].filter(Boolean));
+    body.replaceChildren(...[head, champion, renderMyMatch(t), nav, panel, renderLog(t)].filter(Boolean));
   }
 
   function renderLog(t) {
@@ -439,6 +523,15 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
           el('span', { class: 'tscore mono', text: done ? `${m.gh} - ${m.ga}` : 'vs' }),
           el('span', { class: 'ta' }, teamTag(t, m.away)),
           el('span', { class: 'meta', text: m.desempate ? 'desempate (gol de oro)' : m.leg === 2 ? 'vuelta' : m.leg === 1 && t.format.idaVuelta ? 'ida' : '' }));
+        const lv = t.live?.[m.id];
+        if (!done && lv?.state === 'jugando' && lv.room) {
+          row.querySelector('.tscore').textContent = lv.score ? `${lv.score[0]} - ${lv.score[1]}` : '0 - 0';
+          row.classList.add('livem');
+          row.append(el('button', { type: 'button', class: 'btn ghost', onclick: () => watchMatch(lv.room) }, '● En juego · Mirar'));
+        } else if (!done && lv?.ready?.length) {
+          row.append(el('span', { class: 'meta', text: `${lv.ready.length} listo${lv.ready.length === 1 ? '' : 's'}` }));
+        }
+        if (!done && lv?.dispute && t.admin) row.append(el('span', { class: 'tbadge', text: 'en disputa: cargalo vos' }));
         const canLoad = t.admin && t.status !== 'inscripcion' && (done ? (t.format.type === 'liga' || i === t.rounds.length - 1) : i === cur);
         if (canLoad) {
           const gh = el('input', { class: 'input mini', type: 'number', min: '0', max: '99', value: done ? String(m.gh) : '', 'aria-label': `Goles de ${teamName(t, m.home)}` });
@@ -453,7 +546,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
       }
       panel.append(box);
     });
-    if (t.status !== 'terminado') panel.append(el('p', { class: 'small muted', text: 'Los partidos se juegan cuando los jugadores de los dos equipos están listos (sin fechas fijas). La siguiente fecha/ronda se habilita cuando se jugaron todos los partidos de la actual. Por ahora el admin carga los resultados acá.' }));
+    if (t.status !== 'terminado') panel.append(el('p', { class: 'small muted', text: 'Cada partido se juega cuando todos los jugadores de los dos equipos tocan "Estoy listo" (sin fechas fijas): el juego lo arma solo en la compu con mejor conexión y el resultado se carga solo. La fecha/ronda siguiente se habilita cuando se jugaron todos los partidos de la actual. El admin puede cargar o corregir un resultado a mano.' }));
   }
 
   // ---- admin
@@ -503,6 +596,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps }) {
   }
   function leave() {
     state.code = null;
+    state.readyFor = null;
     clearTimeout(state.timer);
     try { history.replaceState(null, '', location.pathname); } catch { /* nada */ }
   }

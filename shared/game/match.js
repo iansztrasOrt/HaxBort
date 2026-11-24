@@ -25,7 +25,7 @@ export function withBallRadius(stadium, r) {
 export function createMatch(stadium, opts = {}) {
   const m = {
     stadium,
-    settings: { timeLimit: opts.timeLimit ?? 3, scoreLimit: opts.scoreLimit ?? 3, kickCooldown: opts.kickCooldown ?? 0 },
+    settings: { timeLimit: opts.timeLimit ?? 3, scoreLimit: opts.scoreLimit ?? 3, kickCooldown: opts.kickCooldown ?? 0, allowDraw: Boolean(opts.allowDraw) },
     world: null,
     players: [],
     phase: 'idle', // idle | kickoff | playing | goal | ended
@@ -303,8 +303,9 @@ export function tick(m) {
   }
 
   // 2) Reloj: al terminar el tiempo, gana quien va arriba; si hay empate, gol de oro.
+  // (allowDraw: partidos de liga de un torneo, donde el empate vale; sin eso, empate → gol de oro.)
   if (m.phase === 'playing' && limit > 0 && m.ticks >= limit && !m.overtime) {
-    if (m.score.red !== m.score.blue) finish(m, events);
+    if (m.score.red !== m.score.blue || m.settings.allowDraw) finish(m, events);
     else {
       m.overtime = true;
       events.push({ type: 'overtime' });
@@ -318,7 +319,7 @@ export function tick(m) {
       const sl = m.settings.scoreLimit;
       const timeUp = limit > 0 && m.ticks >= limit;
       const tied = m.score.red === m.score.blue;
-      if ((sl > 0 && (m.score.red >= sl || m.score.blue >= sl)) || m.overtime || (timeUp && !tied)) {
+      if ((sl > 0 && (m.score.red >= sl || m.score.blue >= sl)) || m.overtime || (timeUp && (!tied || m.settings.allowDraw))) {
         finish(m, events);
       } else {
         if (timeUp && tied) {
