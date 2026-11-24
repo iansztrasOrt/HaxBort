@@ -117,7 +117,7 @@ export class Room {
     for (let i = 2; taken.has(norm(nick)); i += 1) nick = `${cleanName(name).slice(0, 17) || 'Jugador'} ${i}`;
     const m = {
       id: `p${++this.seq}${randomId().slice(0, 4)}`, secret: randomSecret(), name: nick, avatar: cleanAvatar(avatar) || nick.slice(0, 1).toUpperCase(),
-      team: 'spectator', admin: !this.humans().length, bot: false, joinedAt: this.seq, connected: true, awayTicks: 0,
+      team: 'spectator', admin: !this.humans().length, bot: false, joinedAt: this.seq, waitSince: this.nextWait(), connected: true, awayTicks: 0,
       queue: [], lastSeq: 0, bits: 0, ping: null, ip, chatTimes: [], clientId: cid,
     };
     this.members.set(m.id, m);
@@ -220,7 +220,7 @@ export class Room {
       locked: this.locked, paused: this.paused, phase: this.match.phase, settings: this.settings, botSkill: this.botSkill,
       map: { key: this.map.key, name: this.map.name, tuned: this.map.tuned }, offline: this.offline,
       players: [...this.members.values()].sort((a, b) => a.joinedAt - b.joinedAt).map((m) => ({
-        id: m.id, name: m.name, avatar: m.avatar, team: m.team, admin: m.admin, bot: m.bot, ping: m.ping, away: !m.connected,
+        id: m.id, name: m.name, avatar: m.avatar, team: m.team, admin: m.admin, bot: m.bot, ping: m.ping, away: !m.connected, wait: m.waitSince,
       })),
     };
   }
@@ -266,9 +266,21 @@ export class Room {
 
   // ---------------------------------------------------------------- equipos
 
+  /** Turno en la fila de espera: quien pasa a espectadores va al final de la fila. */
+  nextWait() {
+    this.waitSeq = (this.waitSeq || 0) + 1;
+    return this.waitSeq;
+  }
+
+  /** Espectadores en el orden de la fila (el primero es el que sigue para jugar). */
+  waitingLine() {
+    return [...this.members.values()].filter((m) => m.team === 'spectator').sort((a, b) => a.waitSince - b.waitSince);
+  }
+
   moveTo(id, team) {
     const m = this.members.get(id);
     if (!m || !TEAMS.includes(team) || m.team === team) return false;
+    if (team === 'spectator') m.waitSince = this.nextWait();
     m.team = team;
     setTeam(this.match, id, team);
     this.dirty = true;
@@ -280,7 +292,7 @@ export class Room {
     const used = new Set([...this.members.values()].map((m) => m.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) || `Bot ${this.seq + 1}`;
     const m = {
-      id: `b${++this.seq}`, secret: '', name, avatar: name[0].toUpperCase(), team: 'spectator', admin: false, bot: true, joinedAt: this.seq,
+      id: `b${++this.seq}`, secret: '', name, avatar: name[0].toUpperCase(), team: 'spectator', admin: false, bot: true, joinedAt: this.seq, waitSince: this.nextWait(),
       connected: true, awayTicks: 0, queue: [], lastSeq: 0, bits: 0, ping: null, ip: '', chatTimes: [],
     };
     this.members.set(m.id, m);
@@ -302,7 +314,7 @@ export class Room {
   }
 
   autoPick() {
-    const spec = [...this.members.values()].filter((m) => m.team === 'spectator').sort((a, b) => a.joinedAt - b.joinedAt)[0];
+    const spec = this.waitingLine()[0];
     if (!spec) return null;
     const count = (t) => [...this.members.values()].filter((m) => m.team === t).length;
     const team = count('red') <= count('blue') ? 'red' : 'blue';
@@ -511,6 +523,28 @@ export class Room {
         this.shuffle();
         this.sys('Equipos mezclados.');
         return true;
+      case 'clearteam': {
+        // Flechita del equipo → todos sus jugadores van al final de la fila de espera (en su orden).
+        if (!admin) return deny();
+        const team = msg.team === 'blue' ? 'blue' : msg.team === 'red' ? 'red' : null;
+        if (!team) return true;
+        const list = [...this.members.values()].filter((m) => m.team === team).sort((a, b) => a.joinedAt - b.joinedAt);
+        if (!list.length) return this.tell(id, `No hay nadie en el ${TEAM_ES[team]}.`);
+        for (const m of list) this.moveTo(m.id, 'spectator');
+        this.sys(`Todos los del ${TEAM_ES[team]} pasaron a espera.`);
+        return true;
+      }
+      case 'pullnext': {
+        // Flechita de la fila → el primero que está esperando pasa a ese equipo.
+        if (!admin) return deny();
+        const team = msg.team === 'blue' ? 'blue' : msg.team === 'red' ? 'red' : null;
+        if (!team) return true;
+        const next = this.waitingLine()[0];
+        if (!next) return this.tell(id, 'No hay nadie esperando.');
+        this.moveTo(next.id, team);
+        this.sys(`${next.name} pasó a ${TEAM_ES[team]}.`);
+        return true;
+      }
       case 'reset':
         if (!admin) return deny();
         for (const m of this.members.values()) this.moveTo(m.id, 'spectator');

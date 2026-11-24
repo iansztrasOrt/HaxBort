@@ -337,3 +337,29 @@ describe('radio de la pelota', () => {
     expect(room.settings.ballRadius).toBe(null);
   });
 });
+
+describe('flechitas de equipos y fila de espera', () => {
+  it('equipo → espera (al final de la fila) y primero de la fila → equipo', () => {
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'Admin' }).id;
+    const ids = ['B', 'C', 'D'].map((n) => room.addMember({ name: n }).id);
+    room.moveTo(ids[0], 'red');
+    room.moveTo(ids[1], 'red');
+    room.handle(a, { t: 'clearteam', team: 'red' });
+    expect([...room.members.values()].filter((m) => m.team === 'red')).toHaveLength(0);
+    expect(room.waitingLine().map((m) => m.name)).toEqual(['Admin', 'D', 'B', 'C']);
+    room.handle(a, { t: 'pullnext', team: 'blue' });
+    expect(room.members.get(a).team).toBe('blue');
+    room.handle(a, { t: 'pullnext', team: 'red' });
+    expect(room.members.get(ids[2]).team).toBe('red');
+    expect(room.waitingLine().map((m) => m.name)).toEqual(['B', 'C']);
+  });
+
+  it('solo el admin puede usarlas', () => {
+    const { room } = fakeRoom();
+    room.addMember({ name: 'Admin' });
+    const b = room.addMember({ name: 'B' }).id;
+    room.handle(b, { t: 'pullnext', team: 'red' });
+    expect(room.members.get(b).team).toBe('spectator');
+  });
+});

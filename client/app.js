@@ -946,15 +946,29 @@ function renderRoom() {
   const teams = $('teams');
   teams.replaceChildren();
   const me = myInfo();
+  const waiting = r.players.filter((p) => p.team === 'spectator').sort((a, b) => (a.wait ?? 0) - (b.wait ?? 0));
+  // Flechitas del admin: apuntan hacia donde van los jugadores.
+  //   Rojo →  y  ← Azul: todo el equipo vuelve a la fila de espera (el medio).
+  //   ← y → en Espectadores: el primero de la fila pasa al Rojo / al Azul.
+  const arrow = (dir, label, title, msg, enabled) => el('button', {
+    class: `team-arrow ${dir}`, type: 'button', title, 'aria-label': title, disabled: !enabled, onclick: () => act(msg),
+  }, el('span', { class: 'ar', 'aria-hidden': 'true', text: dir === 'left' ? '←' : '→' }), el('span', { class: 'cap', 'aria-hidden': 'true', text: label }));
   for (const team of ['red', 'spectator', 'blue']) {
-    const list = r.players.filter((p) => p.team === team);
+    const list = team === 'spectator' ? waiting : r.players.filter((p) => p.team === team);
     const canJoin = me && me.team !== team && (!r.locked || admin);
-    const col = el('div', { class: `team ${team}`, 'data-team': team },
-      el('div', { class: 'team-head' }, el('button', {
-        class: 'team-join', type: 'button', disabled: !canJoin,
-        title: canJoin ? `Pasarme a ${TEAM_ES[team]}` : (r.locked && !admin ? 'Equipos bloqueados por el admin' : ''),
-        onclick: () => act({ t: 'team', id: app.me, team }),
-      }, TEAM_ES[team], el('small', { text: String(list.length) }))));
+    const head = el('div', { class: 'team-head' }, el('button', {
+      class: 'team-join', type: 'button', disabled: !canJoin,
+      title: canJoin ? `Pasarme a ${TEAM_ES[team]}` : (r.locked && !admin ? 'Equipos bloqueados por el admin' : ''),
+      onclick: () => act({ t: 'team', id: app.me, team }),
+    }, TEAM_ES[team], el('small', { text: String(list.length) })));
+    if (admin && team === 'red') head.append(arrow('right', 'todos', 'Mandar a todo el Rojo a la fila de espera', { t: 'clearteam', team: 'red' }, list.length > 0));
+    if (admin && team === 'blue') head.prepend(arrow('left', 'todos', 'Mandar a todo el Azul a la fila de espera', { t: 'clearteam', team: 'blue' }, list.length > 0));
+    if (admin && team === 'spectator') {
+      const first = waiting[0]?.name;
+      head.prepend(arrow('left', '1°', first ? `Pasar a ${first} (primero de la fila) al Rojo` : 'No hay nadie esperando', { t: 'pullnext', team: 'red' }, waiting.length > 0));
+      head.append(arrow('right', '1°', first ? `Pasar a ${first} (primero de la fila) al Azul` : 'No hay nadie esperando', { t: 'pullnext', team: 'blue' }, waiting.length > 0));
+    }
+    const col = el('div', { class: `team ${team}`, 'data-team': team }, head);
     const ul = el('ul', { class: 'plist' });
     if (!list.length) ul.append(el('li', { class: 'empty', text: admin ? 'Arrastrá jugadores acá' : (team === 'spectator' ? 'Nadie mirando' : 'Sin jugadores') }));
     for (const p of list) {
@@ -962,6 +976,7 @@ function renderRoom() {
       const li = el('li', { class: `prow${p.id === app.me ? ' me' : ''}${p.away ? ' away' : ''}`, draggable: admin ? 'true' : null, 'data-id': p.id },
         el('span', { class: 'av', style: `background:${color}`, text: (p.avatar || '?').slice(0, 2) }),
         el('span', { class: 'nm', text: p.name, title: p.name }),
+        team === 'spectator' && p === waiting[0] && waiting.length > 0 ? el('span', { class: 'tag next', title: 'Primero en la fila de espera', text: '1°' }) : null,
         p.admin ? el('span', { class: 'crown', title: 'Admin', text: '👑' }) : null,
         p.bot ? el('span', { class: 'tag', text: 'bot' }) : null,
         p.away ? el('span', { class: 'tag', text: 'desconectado' }) : null,
