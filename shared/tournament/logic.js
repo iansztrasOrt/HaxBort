@@ -628,6 +628,25 @@ export function setResult(t, matchId, gh, ga, now = Date.now()) {
 
 export const findMatch = (t, id) => matchById(t, id);
 
+/** Goleadores, asistidores y más veces MVP del torneo (de las estadísticas de cada partido jugado). */
+export function leaders(t) {
+  const acc = new Map();
+  for (const m of allMatches(t)) {
+    if (m.status === 'pendiente' || !m.stats) continue;
+    for (const [pid, r] of Object.entries(m.stats)) {
+      const x = acc.get(pid) || { pid, team: teamOf(t, pid)?.id || null, g: 0, a: 0, mvp: 0, pj: 0 };
+      x.g += r.g || 0;
+      x.a += r.a || 0;
+      x.mvp += r.mvp ? 1 : 0;
+      x.pj += 1;
+      acc.set(pid, x);
+    }
+  }
+  const list = [...acc.values()];
+  const top = (k) => list.filter((x) => x[k] > 0).sort((p, q) => q[k] - p[k] || p.pj - q.pj).slice(0, 10).map((x) => ({ ...x, name: t.players[x.pid]?.name || 'Jugador', value: x[k] }));
+  return { goles: top('g'), asistencias: top('a'), mvps: top('mvp') };
+}
+
 /** Lo que ve cualquiera (no hay secretos en el documento: los jugadores se identifican con un hash). */
 export function publicView(t, pid = null) {
   const cur = currentRoundIndex(t);
@@ -637,6 +656,7 @@ export function publicView(t, pid = null) {
     admin: pid ? isAdmin(t, pid) : false,
     currentRound: cur,
     standings: t.format.type === 'liga' && t.rounds.length ? standings(t) : null,
+    leaders: t.rounds.length ? leaders(t) : null,
     // Los códigos para entrar a un equipo solo los ven sus jugadores y el admin.
     teams: t.teams.map((x) => ({ ...x, joinCode: pid && (x.members.includes(pid) || isAdmin(t, pid)) ? x.joinCode : null })),
   };

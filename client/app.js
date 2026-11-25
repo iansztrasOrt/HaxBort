@@ -156,6 +156,8 @@ function show(screen) {
     app.roomOpen = false;
     closeModals();
   }
+  if (screen !== 'game') $('stats-panel').hidden = true;
+  if (screen === 'welcome') renderCareer();
   if (screen === 'name') {
     $('nick').value = profile.name || '';
     $('avatar').value = profile.avatar || '';
@@ -300,6 +302,10 @@ function resetGameState() {
   app.offsets = new Map();
   app.snapTick = -1;
   app.hist = [];
+  app.stats = null;
+  statsHeld = false;
+  statsUntil = 0;
+  $('stats-panel').hidden = true;
   app.lastPhase = 'idle';
   chat.length = 0;
   renderChat();
@@ -326,7 +332,11 @@ function startClientClock(sess) {
 function attach(sess) {
   app.sess = sess;
   startClientClock(sess);
-  sess.onMessage = onNet;
+  // Solo cuentan los mensajes de la sala actual: los que llegan tarde de una que ya dejaste
+  // (p. ej. "se cerró la sala") no te pueden sacar de donde estás ahora.
+  sess.onMessage = (msg) => {
+    if (app.sess === sess) onNet(msg);
+  };
   sess.onDown = (reason) => {
     if (app.sess !== sess) return;
     startReconnect(reason);
@@ -370,6 +380,91 @@ async function doCreateRoom() {
   }
 }
 
+// ---------------------------------------------------------------- estadísticas del partido
+let statsHeld = false; // Shift apretado
+let statsUntil = 0; // al terminar el partido se muestra 3 segundos
+let statsTimer = 0;
+function showFinalStats() {
+  statsUntil = performance.now() + 3000;
+  $('banner').hidden = true; // el resultado ya está en el título de la tabla
+  renderStatsPanel();
+  clearTimeout(statsTimer);
+  statsTimer = setTimeout(() => {
+    statsUntil = 0;
+    renderStatsPanel();
+  }, 3050);
+}
+function renderStatsPanel() {
+  const panel = $('stats-panel');
+  const visible = app.screen === 'game' && (statsHeld || performance.now() < statsUntil);
+  panel.hidden = !visible;
+  if (!visible) return;
+  const st = app.stats;
+  panel.replaceChildren();
+  if (!st || !st.rows?.length) {
+    panel.append(el('p', { class: 'muted', text: 'Las estadísticas aparecen cuando empieza el partido.' }));
+    return;
+  }
+  const kits = app.room?.settings?.kits || {};
+  const color = (team) => `#${kits[team]?.colors?.[0] || (team === 'red' ? 'e5574a' : '3f7be0')}`;
+  const mvp = st.mvp ? st.rows.find((r) => r.id === st.mvp) : null;
+  panel.append(el('div', { class: 'stats-head' },
+    el('h2', { text: st.final ? (st.score.red === st.score.blue ? 'Empate' : `¡Ganó ${st.score.red > st.score.blue ? 'Rojo' : 'Azul'}!`) : 'Estadísticas' }),
+    el('span', { class: 'small muted', text: `Rojo ${st.score.red} - ${st.score.blue} Azul · posesión ${st.possession.red}% - ${st.possession.blue}%` }),
+    null));
+  if (mvp) {
+    // El MVP, bien a la vista: arriba de la tabla, con su nota en grande.
+    panel.append(el('div', { class: 'mvp-card' },
+      el('span', { class: 'mvp-star', 'aria-hidden': 'true', text: '★' }),
+      el('div', { class: 'mvp-txt' }, el('span', { class: 'mvp-label', text: 'MVP del partido' }), el('strong', { text: mvp.name }),
+        el('span', { class: 'mvp-detail', text: [mvp.g ? `${mvp.g} gol${mvp.g === 1 ? '' : 'es'}` : '', mvp.a ? `${mvp.a} asist.` : '', mvp.sv ? `${mvp.sv} ataj.` : ''].filter(Boolean).join(' · ') })),
+      el('span', { class: 'mvp-rating', text: mvp.rating.toFixed(1) })));
+  }
+  const head = [['Jugador', 'nm'], ['Nota', ''], ['G', ''], ['A', ''], ['Tiros', ''], ['Ataj.', ''], ['Pases', 'opt'], ['Interc.', 'opt'], ['Pérd.', 'opt']];
+  panel.append(el('table', { class: 'stats-table' },
+    el('thead', {}, el('tr', {}, ...head.map(([h, c]) => el('th', { class: c || null, text: h })))),
+    el('tbody', {}, ...st.rows.map((r) => el('tr', { class: [r.id === app.me ? 'me' : '', r.id === st.mvp ? 'is-mvp' : ''].filter(Boolean).join(' ') || null },
+      el('td', { class: 'nm' }, el('span', { class: 'nmw' }, el('span', { class: 'tdot', style: `background:${color(r.team)}` }), r.id === st.mvp ? el('span', { class: 'mvp-tag', text: '★ MVP' }) : null, r.name)),
+      el('td', { class: 'rt' }, el('span', { class: `rating${r.rating >= 7.5 ? ' hi' : r.rating < 5.5 ? ' lo' : ''}`, text: r.rating.toFixed(1) })),
+      el('td', { text: String(r.g + (r.og ? ` (${r.og} e/c)` : '')) }), el('td', { text: String(r.a) }),
+      el('td', { text: `${r.sh} (${r.sot})` }), el('td', { text: String(r.sv) }),
+      el('td', { class: 'opt', text: String(r.pc) }), el('td', { class: 'opt', text: String(r.int) }), el('td', { class: 'opt', text: String(r.pl) }))))),
+  el('p', { class: 'stats-foot', text: st.final ? 'Nota de 1 a 10 · Tiros (al arco) · e/c = en contra' : 'Mantené Shift para ver esta tabla · Tiros (al arco) · la nota suma lo que hiciste; al final, también ganar y la valla invicta' }));
+}
+
+// ---- carrera (por compu): partidos, goles, asistencias y MVPs
+const CAREER_KEY = 'haxbort.carrera.v1';
+const readCareer = () => ({ partidos: 0, ganados: 0, goles: 0, asistencias: 0, mvps: 0, last: '', ...readJSON(localStorage, CAREER_KEY, {}) });
+function recordCareer(st) {
+  // Solo partidos online (la práctica contra bots no cuenta) y solo si jugaste.
+  if (!app.sess || app.sess.kind === 'local') return;
+  const me = st.rows.find((r) => r.id === app.me);
+  if (!me) return;
+  const key = `${app.sess.code || app.room?.code}:${st.matchNo}`;
+  const c = readCareer();
+  if (c.last === key) return; // ya contado
+  c.last = key;
+  c.partidos += 1;
+  if ((me.team === 'red' && st.score.red > st.score.blue) || (me.team === 'blue' && st.score.blue > st.score.red)) c.ganados += 1;
+  c.goles += me.g;
+  c.asistencias += me.a;
+  if (st.mvp === me.id) c.mvps += 1;
+  writeJSON(localStorage, CAREER_KEY, c);
+}
+function renderCareer() {
+  const box = $('career');
+  const c = readCareer();
+  box.hidden = false;
+  if (!c.partidos) {
+    box.replaceChildren(el('p', { class: 'small muted', text: 'Tu carrera arranca con tu primer partido online: acá vas a ver tus goles, asistencias y MVPs.' }));
+    return;
+  }
+  const stat = (n, label) => el('div', { class: 'stat' }, el('b', { text: String(n) }), el('span', { text: label }));
+  box.replaceChildren(el('div', { class: 'title', text: 'Tu carrera' }),
+    stat(c.partidos, c.partidos === 1 ? 'partido' : 'partidos'), stat(c.goles, c.goles === 1 ? 'gol' : 'goles'),
+    stat(c.asistencias, c.asistencias === 1 ? 'asistencia' : 'asistencias'), stat(c.mvps, c.mvps === 1 ? 'MVP' : 'MVPs'));
+}
+
 // ---------------------------------------------------------------- partidos de torneo
 /** El juego eligió esta compu para correr un partido del torneo: arma la sala sola (sin admin). */
 function hostTorneoMatch(cfg) {
@@ -403,7 +498,13 @@ function reportTorneo(final) {
   const send = () => {
     const sc = app.match?.score;
     if (!sc) return;
-    postTorneo(tr.code, { t: 'marcador', match: tr.match, session: tr.session, gh: sc.red, ga: sc.blue, final }, profile.name).catch(() => {});
+    const action = { t: 'marcador', match: tr.match, session: tr.session, gh: sc.red, ga: sc.blue, final };
+    // Al final, las estadísticas de cada jugador del torneo (las calcula la compu que corre el partido).
+    if (final && app.stats?.final) {
+      action.stats = {};
+      for (const r of app.stats.rows) if (r.pid) action.stats[r.pid] = { g: r.g, a: r.a, sv: r.sv, r: r.rating, mvp: r.id === app.stats.mvp };
+    }
+    postTorneo(tr.code, action, profile.name).catch(() => {});
   };
   setTimeout(send, 400); // la foto con el marcador nuevo llega justo después del evento
   if (final) setTimeout(send, 2500); // por si el primero se perdió
@@ -674,6 +775,13 @@ function onNet(msg) {
     case 'ev':
       onEvents(msg.events);
       break;
+    case 'stats':
+      app.stats = msg;
+      if (msg.final) {
+        recordCareer(msg);
+        showFinalStats();
+      } else if (statsHeld) renderStatsPanel();
+      break;
     case 'kicked':
       app.sess?.dispose?.();
       endSession(msg.reason);
@@ -724,7 +832,7 @@ function onEvents(events) {
     if (events.some((e) => e.type === 'goal')) reportTorneo(false);
     if (events.some((e) => e.type === 'end')) {
       reportTorneo(true);
-      showBanner('Partido terminado: el resultado se carga solo en el torneo. Volviendo…', 6000);
+      setTimeout(() => showBanner('Partido terminado: el resultado se carga solo en el torneo. Volviendo…', 4500), 3100); // después de la tabla
       backToTorneo(app.room.torneo.code);
     }
   }
@@ -739,7 +847,8 @@ function onEvents(events) {
     else if (ev.type === 'kickoff') showBanner(`Saque de ${TEAM_ES[ev.team]}`, 900);
     else if (ev.type === 'end') {
       const sc = app.match ? `${app.match.score.red} a ${app.match.score.blue}` : '';
-      showBanner(ev.winner ? `¡Ganó ${TEAM_ES[ev.winner]}! ${sc}` : 'Fin del partido', 3300, ev.winner || '');
+      // (si ya está la tabla del final, el resultado se ve ahí y el cartel no la tapa)
+      if (performance.now() >= statsUntil) showBanner(ev.winner ? `¡Ganó ${TEAM_ES[ev.winner]}! ${sc}` : 'Fin del partido', 3300, ev.winner || '');
       [784, 659, 523, 784].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.07), i * 140));
     }
   }
@@ -747,7 +856,8 @@ function onEvents(events) {
 
 // ---------------------------------------------------------------- teclado y entradas
 // Controles: cada jugador elige los suyos (se guardan en su navegador, en prefs.keys).
-const DEFAULT_KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'ShiftLeft', 'Numpad0'] };
+// (Shift quedó para ver las estadísticas: mantenelo apretado durante el partido.)
+const DEFAULT_KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'Numpad0'] };
 const KEY_ACTIONS = [['up', 'Arriba'], ['down', 'Abajo'], ['left', 'Izquierda'], ['right', 'Derecha'], ['kick', 'Patear']];
 const MAX_KEYS_PER_ACTION = 8;
 const RESERVED_KEYS = new Set(['Escape']); // Esc siempre abre y cierra la sala
@@ -1670,6 +1780,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing(e) || modalOpen()) return;
+  // Shift (si no lo usás para jugar): mientras lo tenés apretado, se ven las estadísticas del partido.
+  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !GAME_CODES.has(e.code)) {
+    if (!statsHeld) {
+      statsHeld = true;
+      renderStatsPanel();
+    }
+    return undefined;
+  }
   // Una tecla elegida para jugar le gana a los atajos (T, Enter, + − 0).
   if (GAME_CODES.has(e.code) && !app.roomOpen && !chatOpen()) {
     pressed.add(e.code);
@@ -1692,8 +1810,20 @@ window.addEventListener('keydown', (e) => {
   }
   return undefined;
 });
-window.addEventListener('keyup', (e) => pressed.delete(e.code));
-window.addEventListener('blur', () => pressed.clear());
+window.addEventListener('keyup', (e) => {
+  pressed.delete(e.code);
+  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && statsHeld) {
+    statsHeld = false;
+    renderStatsPanel();
+  }
+});
+window.addEventListener('blur', () => {
+  pressed.clear();
+  if (statsHeld) {
+    statsHeld = false;
+    renderStatsPanel();
+  }
+});
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) return;
   pressed.clear();

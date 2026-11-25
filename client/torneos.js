@@ -332,6 +332,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     }
     const tabs = [];
     if (t.status !== 'inscripcion') tabs.push(['tabla', t.format.type === 'liga' ? 'Tabla' : 'Llave'], ['partidos', 'Partidos']);
+    if (t.status !== 'inscripcion') tabs.push(['stats', 'Estadísticas']);
     tabs.push(['equipos', `Equipos (${t.teams.length})`]);
     if (t.status === 'inscripcion') tabs.unshift(['anotarse', 'Inscripción']);
     if (t.admin) tabs.push(['admin', 'Admin']);
@@ -356,8 +357,23 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
       type: 'button', role: 'tab', 'aria-selected': String(state.tab === k), onclick: () => { state.tab = k; render(); },
     }, label)));
     const panel = el('div', { class: 'tpanel' });
-    ({ anotarse: renderSignup, tabla: t.format.type === 'liga' ? renderTable : renderBracket, partidos: renderMatches, equipos: renderTeams, admin: renderAdmin })[state.tab](t, panel);
+    ({ stats: renderLeaders, anotarse: renderSignup, tabla: t.format.type === 'liga' ? renderTable : renderBracket, partidos: renderMatches, equipos: renderTeams, admin: renderAdmin })[state.tab](t, panel);
     body.replaceChildren(...[head, champion, renderMyMatch(t), nav, panel, renderLog(t)].filter(Boolean));
+  }
+
+  // ---- goleadores, asistidores y MVPs
+  function renderLeaders(t, panel) {
+    const L = t.leaders || { goles: [], asistencias: [], mvps: [] };
+    const table = (title, list, unit) => el('div', { class: 'tleader' }, el('h3', { text: title }),
+      list.length ? el('table', { class: 'ttable' }, el('tbody', {}, ...list.map((x, i) => el('tr', { class: x.pid === t.me ? 'mine' : '' },
+        el('td', { text: String(i + 1) }),
+        el('td', {}, el('span', { class: 'tteam' }, kitIcon(teamById(t, x.team)?.kit), el('span', { text: x.name }))),
+        el('td', { class: 'pts', text: String(x.value) }),
+        el('td', { class: 'meta', text: `${x.pj} PJ` })))))
+        : el('p', { class: 'small muted', text: `Todavía no hay ${unit}.` }));
+    panel.append(el('div', { class: 'tleaders' },
+      table('Goleadores', L.goles, 'goles'), table('Asistidores', L.asistencias, 'asistencias'), table('Más veces MVP', L.mvps, 'MVPs')),
+    el('p', { class: 'small muted', text: 'Cuentan los partidos que se jugaron en el juego (los que el admin carga a mano no tienen estadísticas).' }));
   }
 
   function renderLog(t) {

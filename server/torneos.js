@@ -276,7 +276,7 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
     const ga = Number(a.ga);
     if (!Number.isInteger(gh) || !Number.isInteger(ga) || gh < 0 || ga < 0 || gh > 99 || ga > 99) throw new TorneoError('Marcador inválido.');
     if (a.final) {
-      L.reports.set(pid, { gh, ga, at: Date.now() });
+      L.reports.set(pid, { gh, ga, at: Date.now(), stats: cleanMatchStats(a.stats, all), host: L.session?.host === pid });
       resolve(doc.code, m.id);
     } else if (!L.score || gh + ga >= L.score[0] + L.score[1]) L.score = [gh, ga];
     return {};
@@ -318,6 +318,10 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
       if (!m || m.status !== 'pendiente') return null;
       try {
         setResult(doc, matchId, result[0], result[1]);
+        // Estadísticas del partido: las de quien corrió la sala (si coinciden con el resultado), si no las de otro.
+        const agree = [...L.reports.values()].filter((r) => r.stats && r.gh === result[0] && r.ga === result[1]);
+        const src = agree.find((r) => r.host) || agree[0];
+        if (src) m.stats = src.stats;
         return { ok: true };
       } catch (e) {
         if (e instanceof TorneoError) return { replay: true }; // p. ej. empate en copa a un partido: se juega de nuevo
@@ -337,6 +341,21 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
       L.resolving = false;
       console.error('[torneos] no se pudo guardar un resultado', e.message);
     });
+  }
+
+  /** Estadísticas que manda un jugador: solo números chicos y solo de los que juegan ese partido. */
+  function cleanMatchStats(raw, participantsList) {
+    if (!raw || typeof raw !== 'object') return null;
+    const ok = new Set(participantsList);
+    const n = (v, max) => (Number.isInteger(v) && v >= 0 && v <= max ? v : 0);
+    const out = {};
+    for (const [pid, r] of Object.entries(raw)) {
+      if (!ok.has(pid) || !r || typeof r !== 'object') continue;
+      const rating = Number(r.r);
+      out[pid] = { g: n(r.g, 99), a: n(r.a, 99), sv: n(r.sv, 999), r: Number.isFinite(rating) ? Math.min(10, Math.max(1, Math.round(rating * 10) / 10)) : null, mvp: r.mvp === true };
+    }
+    if (Object.values(out).filter((x) => x.mvp).length > 1) for (const x of Object.values(out)) x.mvp = false;
+    return Object.keys(out).length ? out : null;
   }
 
   const roomIndex = new Map(); // código de sala → { code, match }

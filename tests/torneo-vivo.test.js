@@ -75,6 +75,28 @@ describe('partidos de torneo en vivo', () => {
     expect(host).toBeTruthy();
   });
 
+  it('se guardan las estadísticas del que corre el partido y salen goleadores, asistidores y MVPs', async () => {
+    const { code, t } = await torneo({ type: 'liga' }, ['ana', 'beto']);
+    const m = current(t)[0];
+    const [h, a] = [nameOf(t, m.home), nameOf(t, m.away)];
+    await act(code, h, { t: 'listo', match: m.id, rtt: 5 });
+    await act(code, a, { t: 'listo', match: m.id, rtt: 90 });
+    const cfg = (await act(code, h, { t: 'listo', match: m.id, rtt: 5 })).torneo.live[m.id].hostConfig;
+    const pidOf = (team) => Object.values(cfg.tickets).find((x) => x.team === team).pid;
+    const [ph, pa] = [pidOf('red'), pidOf('blue')];
+    const stats = { [ph]: { g: 2, a: 0, sv: 1, r: 8.4, mvp: true }, [pa]: { g: 1, a: 0, sv: 0, r: 6.1, mvp: false }, intruso: { g: 50, mvp: true } };
+    // Un jugador manda estadísticas truchas: valen las del que corre el partido
+    await act(code, a, { t: 'marcador', match: m.id, gh: 2, ga: 1, final: true, stats: { [pa]: { g: 9, a: 9, mvp: true } } });
+    await act(code, h, { t: 'marcador', match: m.id, gh: 2, ga: 1, final: true, stats });
+    await new Promise((r) => setTimeout(r, 50));
+    const v = (await call(`/${code}`, K('mirón'))).torneo;
+    expect(v.rounds[0].matches[0].stats[ph]).toMatchObject({ g: 2, mvp: true, r: 8.4 });
+    expect(v.rounds[0].matches[0].stats.intruso).toBeUndefined();
+    expect(v.leaders.goles.map((x) => [x.name, x.value])).toEqual([[h, 2], [a, 1]]);
+    expect(v.leaders.mvps.map((x) => [x.name, x.value])).toEqual([[h, 1]]);
+    expect(v.leaders.asistencias).toEqual([]);
+  });
+
   it('si los resultados no coinciden queda en disputa (lo carga el admin)', async () => {
     const { code, t } = await torneo({ type: 'liga' }, ['ana', 'beto']);
     const m = current(t)[0];

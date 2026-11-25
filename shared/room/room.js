@@ -12,6 +12,7 @@ import { botInput } from '../game/bot.js';
 import { BUILTIN_MAPS } from '../builtinMaps.js';
 import { snapshotBody, withAck } from '../net/protocol.js';
 import { DEFAULT_KITS, cleanKit } from '../game/kits.js';
+import { createStats, updateStats, statsSummary } from '../game/stats.js';
 
 export const MAX_PLAYERS = 30;
 const END_DELAY_TICKS = Math.round(3.5 * TICK_RATE); // cartel de fin y vuelta a la sala
@@ -232,6 +233,7 @@ export class Room {
     this.send(id, this.mapMessage());
     this.send(id, this.state());
     this.send(id, { t: 'history', items: this.history });
+    if (this.stats && this.match.phase !== 'idle' && this.match.phase !== 'ended') this.send(id, this.statsMessage(false));
     if (rejoin) this.sys(`${m.name} volvió.`);
     else if (m.admin && this.humans().length === 1) {
       this.tell(id, this.offline ? 'Práctica contra bots. Armá los equipos y tocá Empezar. Esc abre la sala, T el chat.' : `Creaste la sala. Pasá el código ${this.code} (o el link del botón Código) para que entren tus amigos.`);
@@ -434,6 +436,22 @@ export class Room {
     this.paused = false;
     this.endTimer = 0;
     this.dirty = true;
+    this.stats = createStats(); // estadísticas de este partido (pases, tiros, atajadas, nota, MVP)
+    this.matchNo = (this.matchNo || 0) + 1;
+    this.statsSent = -1;
+  }
+
+  /** Estadísticas para mandar (en un partido de torneo, cada fila dice qué jugador del torneo es). */
+  statsMessage(final = false) {
+    if (!this.stats) return null;
+    const sum = statsSummary(this.stats, this.match, { final });
+    if (this.torneo) {
+      for (const r of sum.rows) {
+        const tk = this.members.get(r.id)?.ticket;
+        if (tk) r.pid = this.torneo.tickets[tk]?.pid || null;
+      }
+    }
+    return { t: 'stats', matchNo: this.matchNo, ...sum };
   }
 
   stop() {
@@ -502,7 +520,13 @@ export class Room {
         setInput(this.match, m.id, m.bot ? botInput(this.match, m.id, { skill: this.botSkill }) : m.connected ? m.bits : 0);
       }
       const events = tick(this.match);
+      if (this.stats) updateStats(this.stats, this.match, events);
       if (events.length) this.onEvents(events);
+      // Las estadísticas van una vez por segundo si cambiaron (para la tabla que se ve con Shift).
+      if (this.stats && this.stats.tick % 60 === 0 && this.stats.version !== this.statsSent && this.match.phase !== 'ended') {
+        this.statsSent = this.stats.version;
+        this.broadcast(this.statsMessage(false));
+      }
       if (this.endTimer > 0) {
         this.endTimer -= 1;
         if (this.endTimer === 0) {
@@ -539,6 +563,10 @@ export class Room {
         out.push({ ...ev, scorerName: scorer?.name || null });
         this.broadcast(msg);
       } else if (ev.type === 'end') {
+        if (this.stats) {
+          this.lastStats = this.statsMessage(true);
+          this.broadcast(this.lastStats);
+        }
         if (this.torneo) {
           // Partido de torneo: queda terminado (no se vuelve a jugar en esta sala).
           this.torneo.state = 'terminado';
