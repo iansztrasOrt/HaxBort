@@ -12,7 +12,7 @@ import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protoc
 import { createRenderer, drawKit, drawDiscLabel } from './render.js';
 import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
-import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker } from './net.js';
+import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker, pageBuild } from './net.js';
 import { createTorneosUI, postTorneo } from './torneos.js';
 
 const $ = (id) => document.getElementById(id);
@@ -381,7 +381,7 @@ async function doCreateRoom() {
 }
 
 // ---------------------------------------------------------------- estadísticas del partido
-let statsHeld = false; // Shift apretado
+let statsHeld = false; // Alt apretado
 let statsUntil = 0; // al terminar el partido se muestra 3 segundos
 let statsTimer = 0;
 function showFinalStats() {
@@ -429,7 +429,7 @@ function renderStatsPanel() {
       el('td', { text: String(r.g + (r.og ? ` (${r.og} e/c)` : '')) }), el('td', { text: String(r.a) }),
       el('td', { text: `${r.sh} (${r.sot})` }), el('td', { text: String(r.sv) }),
       el('td', { class: 'opt', text: String(r.pc) }), el('td', { class: 'opt', text: String(r.int) }), el('td', { class: 'opt', text: String(r.pl) }))))),
-  el('p', { class: 'stats-foot', text: st.final ? 'Nota de 1 a 10 · Tiros (al arco) · e/c = en contra' : 'Mantené Shift para ver esta tabla · Tiros (al arco) · la nota suma lo que hiciste; al final, también ganar y la valla invicta' }));
+  el('p', { class: 'stats-foot', text: st.final ? 'Nota de 1 a 10 · Tiros (al arco) · e/c = en contra' : 'Mantené Alt para ver esta tabla · Tiros (al arco) · la nota suma lo que hiciste; al final, también ganar y la valla invicta' }));
 }
 
 // ---- carrera (por compu): partidos, goles, asistencias y MVPs
@@ -737,6 +737,12 @@ function onNet(msg) {
   switch (msg.t) {
     case 'welcome':
       app.me = msg.id;
+      // La sala corre con otra versión del juego (p. ej. el anfitrión no recargó): algunas cosas nuevas no van a andar.
+      if (app.sess && app.sess.kind !== 'local' && app.sess.kind !== 'host' && msg.build !== pageBuild() && pageBuild()) {
+        sysLine(msg.build
+          ? 'Ojo: quien corre esta sala tiene otra versión del juego. Para que ande todo igual (relator, estadísticas…), recarguen los dos la página.'
+          : 'Ojo: quien corre esta sala tiene una versión vieja del juego (sin relator ni estadísticas). Que recargue la página (F5) y vuelvan a entrar.');
+      }
       if (app.sess) app.sess.code = msg.code;
       if (app.sess && (app.sess.kind === 'server' || app.sess.kind === 'guest')) {
         writeJSON(sessionStorage, K.session, { code: msg.code, id: msg.id, secret: msg.secret, mode: app.sess.kind });
@@ -863,8 +869,9 @@ function onEvents(events) {
 
 // ---------------------------------------------------------------- teclado y entradas
 // Controles: cada jugador elige los suyos (se guardan en su navegador, en prefs.keys).
-// (Shift quedó para ver las estadísticas: mantenelo apretado durante el partido.)
-const DEFAULT_KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'Numpad0'] };
+// (Alt quedó para ver las estadísticas: mantenelo apretado durante el partido.)
+const DEFAULT_KEYS = { up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'], left: ['ArrowLeft', 'KeyA'], right: ['ArrowRight', 'KeyD'], kick: ['KeyX', 'Space', 'KeyK', 'ControlLeft', 'ShiftLeft', 'Numpad0'] };
+const STATS_KEYS = new Set(['AltLeft', 'AltRight']);
 const KEY_ACTIONS = [['up', 'Arriba'], ['down', 'Abajo'], ['left', 'Izquierda'], ['right', 'Derecha'], ['kick', 'Patear']];
 const MAX_KEYS_PER_ACTION = 8;
 const RESERVED_KEYS = new Set(['Escape']); // Esc siempre abre y cierra la sala
@@ -1826,8 +1833,10 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (typing(e) || modalOpen()) return;
-  // Shift (si no lo usás para jugar): mientras lo tenés apretado, se ven las estadísticas del partido.
-  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !GAME_CODES.has(e.code)) {
+  // Alt (si no lo usás para jugar): mientras lo tenés apretado, se ven las estadísticas del partido.
+  // preventDefault: en Windows, soltar Alt manda el foco al menú del navegador y te quedarías sin controles.
+  if (STATS_KEYS.has(e.code) && !GAME_CODES.has(e.code)) {
+    e.preventDefault();
     if (!statsHeld) {
       statsHeld = true;
       renderStatsPanel();
@@ -1858,9 +1867,12 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   pressed.delete(e.code);
-  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && statsHeld) {
-    statsHeld = false;
-    renderStatsPanel();
+  if (STATS_KEYS.has(e.code)) {
+    if (app.screen === 'game' && !GAME_CODES.has(e.code)) e.preventDefault();
+    if (statsHeld) {
+      statsHeld = false;
+      renderStatsPanel();
+    }
   }
 });
 window.addEventListener('blur', () => {

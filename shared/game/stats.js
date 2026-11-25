@@ -22,6 +22,10 @@ const SAVE_MIN_TICKS = 6; // un tiro cortado a quemarropa (en un forcejeo) no es
 const NARR_WAIT = 40; // el relator espera un instante: si el tiro termina en gol o atajada, lo cuenta junto
 
 // ---- relator: lo que pasa, para contarlo en el chat (S.feed se vacía desde la sala)
+function flushSave(S) {
+  if (S.saveNarr) S.feed.push({ type: 'save', by: S.saveNarr.by, shooter: S.saveNarr.shooter });
+  S.saveNarr = null;
+}
 function flushShot(S) {
   if (S.narr) S.feed.push({ type: 'shot', by: S.narr.by, onTarget: S.narr.onTarget });
   S.narr = null;
@@ -30,7 +34,7 @@ const ASSIST_TTL = 8 * 60; // la asistencia vale si el gol llega dentro de 8 seg
 const COUNTERS = ['g', 'a', 'og', 'sh', 'sot', 'sv', 'pc', 'pl', 'int', 'tch'];
 
 export function createStats() {
-  return { rows: new Map(), last: null, cand: null, pass: null, shot: null, poss: { red: 0, blue: 0 }, tick: 0, shotTick: -1, version: 0, feed: [], narr: null };
+  return { rows: new Map(), last: null, cand: null, pass: null, shot: null, poss: { red: 0, blue: 0 }, tick: 0, shotTick: -1, version: 0, feed: [], narr: null, saveNarr: null };
 }
 
 function rowFor(S, p) {
@@ -115,7 +119,9 @@ function onTouch(S, m, p, ball) {
       if (shot && shot.team === prev.team && shot.onTarget && S.tick - shot.tick <= SHOT_TTL && S.tick - shot.tick >= SAVE_MIN_TICKS) {
         r.sv += 1; // ¡atajada!
         S.narr = null;
-        S.feed.push({ type: 'save', by: p.id, shooter: shot.by });
+        // Se cuenta un instante después: si la "atajada" termina en gol en contra, no fue atajada.
+        flushSave(S);
+        S.saveNarr = { by: p.id, shooter: shot.by, tick: S.tick };
       }
       else {
         r.int += 1;
@@ -161,17 +167,28 @@ export function updateStats(S, m, events) {
     if (S.last) S.poss[S.last.team] = (S.poss[S.last.team] || 0) + 1;
     if (S.shot && S.tick - S.shot.tick > SHOT_TTL) S.shot = null;
   }
-  if (S.narr && S.tick - S.narr.tick >= NARR_WAIT && !events.some((ev) => ev.type === 'goal')) flushShot(S);
+  const goalNow = events.some((ev) => ev.type === 'goal');
+  if (S.narr && S.tick - S.narr.tick >= NARR_WAIT && !goalNow) flushShot(S);
+  if (S.saveNarr && S.tick - S.saveNarr.tick >= NARR_WAIT && !goalNow) flushSave(S);
   for (const ev of events) {
     if (ev.type !== 'goal') continue;
     const scorer = m.players.find((p) => p.id === ev.scorerId);
     if (scorer) {
       const r = rowFor(S, scorer);
       S.narr = null;
+      const sv = S.saveNarr;
+      S.saveNarr = null;
       if (ev.ownGoal) {
         r.og += 1;
-        S.feed.push({ type: 'goal', by: scorer.id, ownGoal: true });
+        if (sv && sv.by === scorer.id) { // la desvió a su propio arco: no fue atajada
+          r.sv = Math.max(0, r.sv - 1);
+          S.feed.push({ type: 'goal', by: scorer.id, ownGoal: true, deflected: sv.shooter });
+        } else {
+          if (sv) S.feed.push({ type: 'save', by: sv.by, shooter: sv.shooter });
+          S.feed.push({ type: 'goal', by: scorer.id, ownGoal: true });
+        }
       } else {
+        if (sv) S.feed.push({ type: 'save', by: sv.by, shooter: sv.shooter }); // atajó y otro hizo el gol de rebote
         r.g += 1;
         if (!(S.shot && S.shot.by === scorer.id)) { // gol sin tiro detectado (p. ej. empujándola): igual es un tiro al arco
           r.sh += 1;

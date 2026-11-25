@@ -139,6 +139,20 @@ describe('relator', () => {
     expect(m).toBeTruthy();
   });
 
+  it('la "atajada" que termina en gol en contra no es atajada: el relator dice que la desvió', () => {
+    const { m, S, toca, ticks, row } = escena();
+    toca('r1', { x: 250, y: 0, vx: 8, kick: true, hold: 1 });
+    ticks(10);
+    toca('b1', { x: 340, y: 0, hold: 1 });
+    ticks(5);
+    m.lastTouch = 'b1';
+    updateStats(S, m, [{ type: 'goal', team: 'red', scorerId: 'b1', ownGoal: true }]);
+    m.phase = 'goal';
+    ticks(60);
+    expect(S.feed).toEqual([{ type: 'goal', by: 'b1', ownGoal: true, deflected: 'r1' }]);
+    expect(row('b1')).toMatchObject({ sv: 0, og: 1 });
+  });
+
   it('tiro sin final: se cuenta como remate al arco o afuera (después de un instante)', () => {
     const { S, toca, ticks } = escena();
     toca('r1', { x: 250, y: 0, vx: 8, kick: true, hold: 1 });

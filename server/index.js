@@ -210,6 +210,7 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
         if (msg.mode === 'server') {
           const entry = { kind: 'server', sockets: new Map(), room: null };
           entry.room = new Room({ code, name: cfg.name, password: cfg.password, maxPlayers: cfg.maxPlayers, isPublic: cfg.isPublic !== false }, serverTransport(entry));
+          entry.room.build = /<meta name="haxbort-build" content="([^"]*)"/.exec(String(page()))?.[1] || '';
           rooms.set(code, entry);
           const res = entry.room.addMember({ name: msg.name, avatar: msg.avatar, password: cfg.password, ip: ctx.ip, clientId: msg.clientId });
           enterServerRoom(ws, entry, res);

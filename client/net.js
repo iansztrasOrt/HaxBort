@@ -21,6 +21,16 @@ export const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
+/** Versión de esta página (la escribe el build). */
+export function pageBuild() {
+  try {
+    const v = document.querySelector('meta[name="haxbort-build"]')?.content || '';
+    return v.startsWith('__') ? '' : v;
+  } catch {
+    return '';
+  }
+}
+
 // ---------------------------------------------------------------- reloj que no se frena en segundo plano
 /** En el navegador, los timers de una pestaña oculta se frenan. Un Worker que avisa cada 4 ms no. */
 export function createBrowserTicker(stepFn) {
@@ -497,6 +507,7 @@ export class HostSession extends LocalRoomBase {
         setTimeout(() => link.close(), 300);
       },
     });
+    this.room.build = pageBuild();
     this.selfId = this.room.addMember({ ...profile, password: cfg.password, ticket: cfg.selfTicket || '' }).id;
     this.offs = [
       hub.on('guest', (m) => this.links.set(m.link, new HostLink(this, m.link))),

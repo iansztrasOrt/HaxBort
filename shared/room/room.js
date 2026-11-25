@@ -231,7 +231,8 @@ export class Room {
   greet(id, { rejoin = false, rid } = {}) {
     const m = this.members.get(id);
     if (!m) return;
-    this.send(id, { t: 'welcome', id, secret: m.secret, code: this.code, offline: this.offline, ...(rid ? { rid } : {}) });
+    // build: versión del juego de quien corre la sala (para avisar si no coincide con la del que entra)
+    this.send(id, { t: 'welcome', id, secret: m.secret, code: this.code, offline: this.offline, build: this.build || null, ...(rid ? { rid } : {}) });
     this.send(id, this.mapMessage());
     this.send(id, this.state());
     this.send(id, { t: 'history', items: this.history });
@@ -308,7 +309,7 @@ export class Room {
     for (const it of items) {
       let text = '';
       if (it.type === 'goal') {
-        text = it.ownGoal ? `😬 Gol en contra de ${name(it.by)}. ${score()}`
+        text = it.ownGoal ? `😬 Gol en contra de ${name(it.by)}${it.deflected ? ` (desvió el remate de ${name(it.deflected)})` : ''}. ${score()}`
           : `⚽ ¡GOL de ${name(it.by)}!${it.assist ? ` Asistencia de ${name(it.assist)}.` : ''} ${score()}`;
       } else if (it.type === 'save') text = `🧤 ¡Atajada de ${name(it.by)} al remate de ${name(it.shooter)}!`;
       else if (it.type === 'shot') text = it.onTarget ? `🎯 Remate de ${name(it.by)} al arco.` : `💨 Tiro de ${name(it.by)}, se va afuera.`;
