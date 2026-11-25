@@ -455,9 +455,12 @@ class HostLink {
     else this.host.hub.send({ t: 'relay', link: this.id, msg });
   }
 
-  lost() {
+  /** Se cortó este canal. `left`: el invitado se fue a propósito ("Salir") → sale de la sala;
+   *  si no, queda desconectado un rato con el lugar guardado (por si vuelve). */
+  lost(left = false) {
     if (this.memberId && this.host.byMember.get(this.memberId) === this) {
-      this.host.room?.disconnect(this.memberId);
+      if (left) this.host.room?.handle(this.memberId, { t: 'leave' });
+      else this.host.room?.disconnect(this.memberId);
       this.host.byMember.delete(this.memberId);
     }
     this.host.links.delete(this.id);
@@ -499,7 +502,7 @@ export class HostSession extends LocalRoomBase {
       hub.on('guest', (m) => this.links.set(m.link, new HostLink(this, m.link))),
       hub.on('signal', (m) => this.links.get(m.link)?.onSignal(m.data || {})),
       hub.on('relay', (m) => this.links.get(m.link)?.receive(m.msg, 'relay')),
-      hub.on('unlink', (m) => this.links.get(m.link)?.lost()),
+      hub.on('unlink', (m) => this.links.get(m.link)?.lost(m.left === true)),
     ];
     hub.relayAny = (buf, link) => this.links.get(link)?.receive(buf, 'relay');
     this.room.greet(this.selfId);
@@ -638,7 +641,8 @@ export class GuestSession {
 
   leave() {
     this.send({ t: 'leave' });
-    this.hub.send({ t: 'unlink', link: this.link });
+    // "left": me voy a propósito. Así el anfitrión me saca aunque este aviso le llegue antes que el "leave".
+    this.hub.send({ t: 'unlink', link: this.link, left: true });
     this.dispose();
   }
 

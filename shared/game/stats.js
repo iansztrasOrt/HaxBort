@@ -18,12 +18,19 @@ const SHOT_ARRIVE_SPEED = 1.5; // tiene que llegar al arco con algo de fuerza
 const SHOT_MAX_SHARE = 0.6; // y salir desde no más lejos que el 60% de la distancia del medio al arco
 const HOLD_TICKS = 5; // un cambio de dueño cuenta si se sostiene un instante (o si patea): en una pelota disputada no se cuenta cada roce
 const SHOT_TTL = 3 * 60;
-const SAVE_MIN_TICKS = 6; // un tiro cortado a quemarropa (en un forcejeo) no es atajada // un tiro "vive" 3 segundos (después ya no cuenta como atajada)
+const SAVE_MIN_TICKS = 6; // un tiro cortado a quemarropa (en un forcejeo) no es atajada
+const NARR_WAIT = 40; // el relator espera un instante: si el tiro termina en gol o atajada, lo cuenta junto
+
+// ---- relator: lo que pasa, para contarlo en el chat (S.feed se vacía desde la sala)
+function flushShot(S) {
+  if (S.narr) S.feed.push({ type: 'shot', by: S.narr.by, onTarget: S.narr.onTarget });
+  S.narr = null;
+} // un tiro "vive" 3 segundos (después ya no cuenta como atajada)
 const ASSIST_TTL = 8 * 60; // la asistencia vale si el gol llega dentro de 8 segundos del pase
 const COUNTERS = ['g', 'a', 'og', 'sh', 'sot', 'sv', 'pc', 'pl', 'int', 'tch'];
 
 export function createStats() {
-  return { rows: new Map(), last: null, cand: null, pass: null, shot: null, poss: { red: 0, blue: 0 }, tick: 0, shotTick: -1, version: 0 };
+  return { rows: new Map(), last: null, cand: null, pass: null, shot: null, poss: { red: 0, blue: 0 }, tick: 0, shotTick: -1, version: 0, feed: [], narr: null };
 }
 
 function rowFor(S, p) {
@@ -87,6 +94,8 @@ function maybeShot(S, m, p, ball) {
   r.sh += 1;
   if (target === 'arco') r.sot += 1;
   S.shot = { by: p.id, team: p.team, tick: S.tick, onTarget: target === 'arco' };
+  flushShot(S);
+  S.narr = { by: p.id, onTarget: target === 'arco', tick: S.tick };
   S.version += 1;
 }
 
@@ -103,7 +112,11 @@ function onTouch(S, m, p, ball) {
       }
     } else {
       const shot = S.shot;
-      if (shot && shot.team === prev.team && shot.onTarget && S.tick - shot.tick <= SHOT_TTL && S.tick - shot.tick >= SAVE_MIN_TICKS) r.sv += 1; // ¡atajada!
+      if (shot && shot.team === prev.team && shot.onTarget && S.tick - shot.tick <= SHOT_TTL && S.tick - shot.tick >= SAVE_MIN_TICKS) {
+        r.sv += 1; // ¡atajada!
+        S.narr = null;
+        S.feed.push({ type: 'save', by: p.id, shooter: shot.by });
+      }
       else {
         r.int += 1;
         if (prevRow) prevRow.pl += 1;
@@ -148,23 +161,32 @@ export function updateStats(S, m, events) {
     if (S.last) S.poss[S.last.team] = (S.poss[S.last.team] || 0) + 1;
     if (S.shot && S.tick - S.shot.tick > SHOT_TTL) S.shot = null;
   }
+  if (S.narr && S.tick - S.narr.tick >= NARR_WAIT && !events.some((ev) => ev.type === 'goal')) flushShot(S);
   for (const ev of events) {
     if (ev.type !== 'goal') continue;
     const scorer = m.players.find((p) => p.id === ev.scorerId);
     if (scorer) {
       const r = rowFor(S, scorer);
-      if (ev.ownGoal) r.og += 1;
-      else {
+      S.narr = null;
+      if (ev.ownGoal) {
+        r.og += 1;
+        S.feed.push({ type: 'goal', by: scorer.id, ownGoal: true });
+      } else {
         r.g += 1;
         if (!(S.shot && S.shot.by === scorer.id)) { // gol sin tiro detectado (p. ej. empujándola): igual es un tiro al arco
           r.sh += 1;
           r.sot += 1;
         }
         const pass = S.pass;
+        let assist = null;
         if (pass && pass.to === scorer.id && S.tick - pass.tick <= ASSIST_TTL) {
           const ar = S.rows.get(pass.from);
-          if (ar) ar.a += 1;
+          if (ar) {
+            ar.a += 1;
+            assist = pass.from;
+          }
         }
+        S.feed.push({ type: 'goal', by: scorer.id, assist });
       }
     }
     S.last = null;

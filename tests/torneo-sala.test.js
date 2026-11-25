@@ -118,3 +118,19 @@ describe('sala de partido de torneo', () => {
     expect(room.match.phase).not.toBe('ended');
   });
 });
+
+describe('relator en la sala', () => {
+  it('el gol lo cuenta el relator en el chat (con nombre y marcador), sin el mensaje viejo', () => {
+    const { room, sent } = sala({ rules: { time: 3, score: 0, map: 'clasica', allowDraw: true } });
+    const ids = ['tk-local-1', 'tk-local-2', 'tk-visita-1', 'tk-visita-2'].map((tk, i) => room.addMember({ name: ['Ana', 'Beto', 'Caro', 'Dani'][i], ticket: tk }).id);
+    ticks(room, 4 * TICK_RATE);
+    const m = room.match;
+    m.phase = 'playing';
+    Object.assign(m.world.discs[0], { x: 300, y: 0, vx: 9, vy: 0 });
+    m.lastTouch = ids[0];
+    ticks(room, 30);
+    const chats = sent.filter((x) => x.msg.t === 'chat' && x.msg.id === 'relator').map((x) => x.msg.text);
+    expect(chats.some((t) => /GOL de Ana/.test(t) && /Rojo 1 - 0 Azul/.test(t))).toBe(true);
+    expect(sent.some((x) => x.msg.t === 'sys' && /¡Gol de/.test(x.msg.text))).toBe(false);
+  });
+});

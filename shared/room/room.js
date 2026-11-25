@@ -108,8 +108,10 @@ export class Room {
       this.settings.ballRadius = r.ball;
     }
     this.settings.kits = { red: kit(cfg.home?.kit, 'red'), blue: kit(cfg.away?.kit, 'blue') };
-    if (typeof rules.map === 'string' && BUILTIN_MAPS.some((b) => b.id === rules.map)) this.setBuiltinMap(rules.map);
-    else this.rebuildMatch();
+    let mapOk = false;
+    if (typeof rules.mapText === 'string' && rules.mapText) mapOk = this.setMap({ key: `t:${cleanText(rules.map, 20)}`, text: rules.mapText, tune: Boolean(rules.mapTune) }).ok; // cancha propia del torneo
+    if (!mapOk && typeof rules.map === 'string' && BUILTIN_MAPS.some((b) => b.id === rules.map)) mapOk = this.setBuiltinMap(rules.map).ok;
+    if (!mapOk) this.rebuildMatch();
     this.locked = true;
     this.isPublic = false;
   }
@@ -297,6 +299,24 @@ export class Room {
 
   broadcast(msg) {
     for (const m of this.members.values()) if (!m.bot && m.connected) this.transport.send(m.id, msg);
+  }
+
+  /** El relator del juego: cuenta en el chat los tiros, atajadas, goles y asistencias. */
+  narrate(items) {
+    const name = (id) => this.members.get(id)?.name || this.match.players.find((p) => p.id === id)?.name || 'alguien';
+    const score = () => `Rojo ${this.match.score.red} - ${this.match.score.blue} Azul`;
+    for (const it of items) {
+      let text = '';
+      if (it.type === 'goal') {
+        text = it.ownGoal ? `😬 Gol en contra de ${name(it.by)}. ${score()}`
+          : `⚽ ¡GOL de ${name(it.by)}!${it.assist ? ` Asistencia de ${name(it.assist)}.` : ''} ${score()}`;
+      } else if (it.type === 'save') text = `🧤 ¡Atajada de ${name(it.by)} al remate de ${name(it.shooter)}!`;
+      else if (it.type === 'shot') text = it.onTarget ? `🎯 Remate de ${name(it.by)} al arco.` : `💨 Tiro de ${name(it.by)}, se va afuera.`;
+      if (!text) continue;
+      const msg = { t: 'chat', id: 'relator', name: '🎙️ Relator', team: 'relator', text };
+      this.remember(msg);
+      this.broadcast(msg);
+    }
   }
 
   remember(item) {
@@ -520,7 +540,10 @@ export class Room {
         setInput(this.match, m.id, m.bot ? botInput(this.match, m.id, { skill: this.botSkill }) : m.connected ? m.bits : 0);
       }
       const events = tick(this.match);
-      if (this.stats) updateStats(this.stats, this.match, events);
+      if (this.stats) {
+        updateStats(this.stats, this.match, events);
+        if (this.stats.feed.length) this.narrate(this.stats.feed.splice(0));
+      }
       if (events.length) this.onEvents(events);
       // Las estadísticas van una vez por segundo si cambiaron (para la tabla que se ve con Shift).
       if (this.stats && this.stats.tick % 60 === 0 && this.stats.version !== this.statsSent && this.match.phase !== 'ended') {
@@ -557,11 +580,14 @@ export class Room {
     for (const ev of events) {
       if (ev.type === 'goal') {
         const scorer = this.members.get(ev.scorerId);
-        const sc = `${this.match.score.red} - ${this.match.score.blue}`;
-        const msg = { t: 'sys', text: ev.ownGoal ? `Gol en contra de ${scorer?.name || '?'}. ${sc}` : `¡Gol de ${scorer?.name || TEAM_ES[ev.team]}! ${sc}` };
-        this.remember(msg);
+        // (con estadísticas, el gol lo cuenta el relator, con la asistencia)
+        if (!this.stats) {
+          const sc = `${this.match.score.red} - ${this.match.score.blue}`;
+          const msg = { t: 'sys', text: ev.ownGoal ? `Gol en contra de ${scorer?.name || '?'}. ${sc}` : `¡Gol de ${scorer?.name || TEAM_ES[ev.team]}! ${sc}` };
+          this.remember(msg);
+          this.broadcast(msg);
+        }
         out.push({ ...ev, scorerName: scorer?.name || null });
-        this.broadcast(msg);
       } else if (ev.type === 'end') {
         if (this.stats) {
           this.lastStats = this.statsMessage(true);

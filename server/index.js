@@ -160,7 +160,7 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
     return id;
   }
 
-  function dropLink(id, reason, { notifyHost = true, notifyGuest = true } = {}) {
+  function dropLink(id, reason, { notifyHost = true, notifyGuest = true, left = false } = {}) {
     const link = links.get(id);
     if (!link) return;
     links.delete(id);
@@ -168,7 +168,7 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
     const e = rooms.get(link.code);
     if (e?.kind === 'p2p') {
       e.links.delete(id);
-      if (notifyHost) send(e.host, { t: 'unlink', link: id });
+      if (notifyHost) send(e.host, { t: 'unlink', link: id, ...(left ? { left: true } : {}) });
     }
     if (notifyGuest) send(link.guest, { t: 'unlink', link: id, reason });
   }
@@ -272,7 +272,8 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
         if (!link) return;
         const e = rooms.get(link.code);
         if (e?.host === ws) dropLink(id, msg.reason || null, { notifyHost: false });
-        else if (link.guest === ws) dropLink(id, null, { notifyGuest: false });
+        // left: el invitado tocó "Salir" (no se le cortó la conexión): el anfitrión lo saca de la sala.
+        else if (link.guest === ws) dropLink(id, null, { notifyGuest: false, left: msg.left === true });
         return;
       }
       case 'summary': {

@@ -470,6 +470,13 @@ function renderCareer() {
 function hostTorneoMatch(cfg) {
   return exclusiveEntry('create', async () => {
     try {
+      // Cancha propia del torneo: se baja del servidor (esta compu puede no tenerla guardada).
+      if (cfg.rules?.map?.startsWith('c-') && !cfg.rules.mapText) {
+        const res = await fetch(`/api/torneos/${cfg.code}/mapa/${cfg.rules.map}`, { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (!data?.ok) throw new Error('no se pudo bajar la cancha del torneo');
+        cfg = { ...cfg, rules: { ...cfg.rules, mapText: data.text, mapTune: data.tune !== false } };
+      }
       const hub = await ensureHub();
       resetGameState();
       const roomCfg = {
@@ -766,7 +773,7 @@ function onNet(msg) {
       break;
     case 'chat': case 'sys': case 'help':
       addChatItem(msg);
-      if (msg.t === 'chat' && msg.id !== app.me) beep(880, 0.04, 'sine', 0.025);
+      if (msg.t === 'chat' && msg.id !== app.me && msg.id !== 'relator') beep(880, 0.04, 'sine', 0.025);
       break;
     case 'error':
       addChatItem({ t: 'sys', text: msg.text });
@@ -1402,6 +1409,8 @@ function renderRoom() {
   }
   $('stadium-name').textContent = `${r.map.name}${r.map.tuned ? ' · patada ajustada' : ''}`;
   $('btn-pick').textContent = admin && idle ? 'Elegir' : 'Ver';
+  // Guardar cancha: si es una cancha propia (no de las que vienen con el juego) y todavía no la tenés.
+  $('btn-save-map').hidden = !app.map?.text || String(app.map.key || '').startsWith('b:') || library.some((x) => x.text === app.map.text);
   $('btn-start').hidden = !admin || !idle;
   $('btn-pause').hidden = !admin || idle;
   $('btn-stop').hidden = !admin || idle;
@@ -1671,6 +1680,28 @@ async function importFiles(files) {
     if (f.size > 1024 * 1024) importText('', `${f.name} (${fmtKB(f.size)})`);
     else importText(await f.text(), f.name);
   }
+}
+
+/** Guarda en tu biblioteca la cancha que se está usando en la sala (sirve para otras salas y para torneos). */
+function saveCurrentMap() {
+  const m = app.map;
+  if (!m?.text) return;
+  if (library.some((x) => x.text === m.text)) {
+    toast('Esa cancha ya está en tu biblioteca.');
+    return;
+  }
+  const res = loadStadium(m.text);
+  if (!res.ok) {
+    toast('No se pudo leer esta cancha.');
+    return;
+  }
+  library.unshift({
+    id: Math.random().toString(36).slice(2, 10), name: res.stadium.name || m.name || 'Cancha', author: 'Guardada desde una sala', createdAt: Date.now(),
+    size: new Blob([m.text]).size, favorite: false, text: m.text, thumb: thumbFor(res.stadium), normalizeKick: Boolean(m.tune),
+  });
+  saveLibrary();
+  $('btn-save-map').hidden = true;
+  toast(`"${res.stadium.name}" quedó guardada: la vas a ver en tu biblioteca y al elegir estadio en un torneo.`, 4000);
 }
 
 function renderLibrary() {
@@ -1953,6 +1984,7 @@ function bind() {
   $('btn-pause').addEventListener('click', () => act({ t: 'pause' }));
   $('btn-stop').addEventListener('click', () => act({ t: 'stop' }));
   $('btn-pick').addEventListener('click', () => openMaps('pick'));
+  $('btn-save-map').addEventListener('click', () => saveCurrentMap());
   for (const id of ['time-input', 'score-input', 'ball-input']) {
     const inp = $(id);
     inp.addEventListener('change', () => submitRules(inp));
@@ -2058,6 +2090,7 @@ async function init() {
     $, el, toast, getProfile: () => profile, show, maps: BUILTIN_MAPS.map((m) => ({ id: m.id, name: m.name })),
     hostMatch: (cfg) => hostTorneoMatch(cfg),
     joinMatch: ({ room, ticket }) => joinRoom(room, { ticket }),
+    savedMaps: () => library.map((x) => ({ id: x.id, name: x.name, text: x.text, tune: x.normalizeKick !== false })),
     watchMatch: (room) => joinRoom(room),
     inRoom: () => (app.screen === 'game' ? (app.sess?.code || app.room?.code || null) : null),
     busy: () => Boolean(entering),

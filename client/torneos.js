@@ -58,7 +58,7 @@ export async function postTorneo(code, action, playerName) {
 
 const STATUS_ES = { inscripcion: 'Inscripción abierta', en_curso: 'En juego', terminado: 'Terminado' };
 
-export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatch, joinMatch, watchMatch, inRoom, busy }) {
+export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatch, joinMatch, watchMatch, inRoom, busy, savedMaps = () => [] }) {
   const state = { code: null, t: null, tab: null, timer: 0, busy: false, error: null, readyFor: null, rtt: null, handled: new Set() };
   const root = () => $('torneos-body');
 
@@ -223,12 +223,33 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     else parts.push(f.idaVuelta ? 'llaves ida y vuelta' : 'partido único');
     const r = f.rules;
     parts.push(r.time ? `${String(r.time).replace('.', ',')} min` : 'sin tiempo', r.score ? `a ${r.score} goles` : 'sin límite de goles');
+    const mapName = maps.find((m) => m.id === r.map)?.name || state.t?.maps?.[r.map]?.name;
+    if (mapName) parts.push(mapName);
     return parts.join(' · ');
   }
   const confirmBtn = (label, ask, fn, cls = 'btn') => el('button', { type: 'button', class: cls, onclick: () => { if (window.confirm(ask)) fn(); } }, label);
 
   // ---------------------------------------------------------------- formulario de modalidad (crear y editar)
-  function formatForm(f, { submitLabel, onSubmit, withName = null, locked = false }) {
+  /** Opciones de estadio: las del juego, las canchas que ya tiene el torneo y las que guardaste vos. */
+  function mapOptions(f, opt, torneoMaps = {}) {
+    const groups = [el('optgroup', { label: 'Del juego' }, ...maps.map((m) => opt(m.id, m.name, m.id === f.rules.map)))];
+    const own = Object.entries(torneoMaps);
+    if (own.length) groups.push(el('optgroup', { label: 'Canchas de este torneo' }, ...own.map(([id, m]) => opt(id, m.name, id === f.rules.map))));
+    const saved = savedMaps().filter((m) => !own.some(([, x]) => x.name === m.name));
+    if (saved.length) groups.push(el('optgroup', { label: 'Tus canchas guardadas' }, ...saved.map((m) => opt(`lib:${m.id}`, m.name, false))));
+    return groups;
+  }
+  /** Si eligieron una cancha guardada en esta compu, se sube al torneo (así la tienen todos los partidos). */
+  async function resolveMap(code, format) {
+    const v = format.rules.map;
+    if (!v.startsWith('lib:')) return format;
+    const m = savedMaps().find((x) => `lib:${x.id}` === v);
+    if (!m) throw new Error('No encontré esa cancha en tu biblioteca.');
+    const data = await api(`/${code}`, { action: { t: 'subir_cancha', name: m.name, text: m.text, tune: m.tune } });
+    return { ...format, rules: { ...format.rules, map: data.result.map } };
+  }
+
+  function formatForm(f, { submitLabel, onSubmit, withName = null, locked = false, torneoMaps = {} }) {
     const id = (s) => `tf-${s}`;
     const form = el('form', { class: 'tform', onsubmit: (e) => {
       e.preventDefault();
@@ -275,7 +296,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
         el('label', { class: 'field' }, 'Tiempo (min)', el('input', { class: 'input', id: id('time'), type: 'number', min: '0', max: '60', step: '0.5', value: String(f.rules.time) })),
         el('label', { class: 'field' }, 'Goles', el('input', { class: 'input', id: id('score'), type: 'number', min: '0', max: '99', step: '1', value: String(f.rules.score) })),
         el('label', { class: 'field' }, 'Pelota (radio)', el('input', { class: 'input', id: id('ball'), type: 'number', min: '3', max: '10', step: '1', value: f.rules.ballRadius ?? '', placeholder: 'auto' })),
-        el('label', { class: 'field' }, 'Estadio', el('select', { id: id('map') }, ...maps.map((m) => opt(m.id, m.name, m.id === f.rules.map))))),
+        el('label', { class: 'field' }, 'Estadio', el('select', { id: id('map') }, ...mapOptions(f, opt, torneoMaps)))),
       el('p', { class: 'small muted', text: 'Tiempo y goles: 0 = sin límite. Pelota vacía = la del estadio.' }),
       el('button', { class: 'btn primary', type: 'submit' }, submitLabel));
     sync();
@@ -293,7 +314,12 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
       withName: '',
       onSubmit: async ({ name, format }) => {
         try {
-          const data = await api('', { name, format });
+          const own = format.rules.map.startsWith('lib:');
+          const data = await api('', { name, format: own ? { ...format, rules: { ...format.rules, map: 'clasica' } } : format });
+          if (own) { // cancha guardada: se sube al torneo recién creado y se elige
+            const next = await resolveMap(data.code, format);
+            await api(`/${data.code}`, { action: { t: 'editar', format: next } });
+          }
           rememberMine(data.torneo);
           open(data.code);
           toast(`Torneo creado. Código: ${data.code}`, 4000);
@@ -583,8 +609,14 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     }
     panel.append(el('h3', { text: 'Nombre y modalidad' }), formatForm(t.format, {
       submitLabel: 'Guardar cambios', withName: t.name, locked: false,
+      torneoMaps: t.maps || {},
       onSubmit: async ({ name, format }) => {
-        if (await act({ t: 'editar', name, format })) toast('Torneo actualizado.', 1600);
+        try {
+          const next = await resolveMap(t.code, format);
+          if (await act({ t: 'editar', name, format: next })) toast('Torneo actualizado.', 1600);
+        } catch (e) {
+          toast(e.message, 4200);
+        }
       },
     }));
     panel.append(el('div', { class: 'tactions' }, el('button', { type: 'button', class: 'linkbtn', onclick: () => { forgetMine(t.code); home(); } }, 'Quitar de "Mis torneos"')));

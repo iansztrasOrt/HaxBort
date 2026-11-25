@@ -71,6 +71,27 @@ for (const [kind, makeStore] of stores) {
       expect(v.torneo.solos).toHaveLength(20);
     });
 
+    it('canchas propias: el admin la sube, se elige para el torneo y la puede bajar cualquiera', async () => {
+      const { BUILTIN_MAPS } = await import('../shared/builtinMaps.js');
+      const text = BUILTIN_MAPS.find((m) => m.id === 'hockey').text.replace('"Hockey"', '"Mi Cancha"');
+      const c = await call('', { key: K('adm3'), body: { name: 'Con cancha', format: { teamSize: 1 } } });
+      expect((await call(`/${c.code}`, { key: K('otro3'), body: { action: { t: 'subir_cancha', name: 'X', text } } })).status).toBe(400);
+      const bad = await call(`/${c.code}`, { key: K('adm3'), body: { action: { t: 'subir_cancha', name: 'Rota', text: '{ "vertexes": [ {' } } });
+      expect(bad.status).toBe(400);
+      expect((await call(`/${c.code}`, { key: K('adm3'), body: { action: { t: 'editar', format: { rules: { map: 'c-0000000000' } } } } })).error).toMatch(/no está subida/);
+      const up = await call(`/${c.code}`, { key: K('adm3'), body: { action: { t: 'subir_cancha', name: 'Mi Cancha', text, tune: true } } });
+      expect(up.status).toBe(200);
+      const id = up.result.map;
+      expect(id).toMatch(/^c-[0-9a-f]{10}$/);
+      expect(up.torneo.maps[id].name).toBe('Mi Cancha');
+      const ed = await call(`/${c.code}`, { key: K('adm3'), body: { action: { t: 'editar', format: { rules: { map: id } } } } });
+      expect(ed.torneo.format.rules.map).toBe(id);
+      const got = await call(`/${c.code}/mapa/${id}`);
+      expect(got.text).toBe(text);
+      expect(got.name).toBe('Mi Cancha');
+      expect((await call(`/${c.code}/mapa/c-1111111111`)).status).toBe(404);
+    });
+
     it('errores claros: sin identificación, torneo inexistente, pedido inválido', async () => {
       expect((await call('', { body: { name: 'x' } })).status).toBe(400);
       const nf = await call('/ZZZZZZ');

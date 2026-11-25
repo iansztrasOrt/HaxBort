@@ -8,7 +8,8 @@
 // en el torneo solo queda un hash de esa clave, así que nadie puede hacerse pasar por otro.
 
 import crypto from 'node:crypto';
-import { createTorneo, applyAction, publicView, newCode, TorneoError, findMatch, playable, teamById, matchRules, setResult } from '../shared/tournament/logic.js';
+import { loadStadium } from '../shared/stadium/load.js';
+import { createTorneo, applyAction, publicView, newCode, TorneoError, findMatch, playable, teamById, matchRules, setResult, isAdmin } from '../shared/tournament/logic.js';
 
 // ---------------------------------------------------------------- guardado
 export class MemoryStore {
@@ -32,6 +33,13 @@ export class MemoryStore {
     this.rows.set(code, { doc: structuredClone(doc), version: version + 1 });
     return true;
   }
+  async putMap(code, id, text) {
+    this.maps ||= new Map();
+    this.maps.set(`${code}/${id}`, text);
+  }
+  async getMap(code, id) {
+    return this.maps?.get(`${code}/${id}`) ?? null;
+  }
   async close() {}
 }
 
@@ -52,6 +60,13 @@ export class PgStore {
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )`);
+    // Canchas propias de un torneo (aparte, para no reescribir el texto del mapa en cada cambio del torneo).
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS torneo_mapas (
+      code text NOT NULL,
+      id text NOT NULL,
+      text text NOT NULL,
+      PRIMARY KEY (code, id)
+    )`);
   }
   async get(code) {
     const { rows } = await this.pool.query('SELECT doc, version FROM torneos WHERE code = $1', [code]);
@@ -69,6 +84,13 @@ export class PgStore {
     );
     return rowCount === 1;
   }
+  async putMap(code, id, text) {
+    await this.pool.query('INSERT INTO torneo_mapas (code, id, text) VALUES ($1, $2, $3) ON CONFLICT (code, id) DO NOTHING', [code, id, text]);
+  }
+  async getMap(code, id) {
+    const { rows } = await this.pool.query('SELECT text FROM torneo_mapas WHERE code = $1 AND id = $2', [code, id]);
+    return rows[0]?.text ?? null;
+  }
   async close() {
     await this.pool?.end();
   }
@@ -80,6 +102,7 @@ export function createStore(url = process.env.DATABASE_URL) {
 
 // ---------------------------------------------------------------- API
 const CODE = /^[A-Z0-9]{6}$/;
+const MAP_MAX_BYTES = 512 * 1024; // una cancha propia del torneo
 const pidOf = (key) => crypto.createHash('sha256').update(`haxbort:${key}`).digest('hex').slice(0, 16);
 
 function readBody(req, limit = 16 * 1024) {
@@ -358,6 +381,26 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
     return Object.keys(out).length ? out : null;
   }
 
+  /** El admin sube una cancha propia: se valida, se guarda aparte y queda disponible para la modalidad. */
+  async function uploadMap(code, pid, a) {
+    const text = typeof a.text === 'string' ? a.text : '';
+    if (!text || Buffer.byteLength(text) > MAP_MAX_BYTES) throw new TorneoError(`La cancha tiene que pesar menos de ${MAP_MAX_BYTES / 1024} KB.`);
+    const res = loadStadium(text);
+    if (!res.ok) throw new TorneoError(`La cancha tiene errores: ${res.errors[0]?.where || ''} ${res.errors[0]?.msg || ''}`.trim());
+    const tune = a.tune !== false;
+    const id = `c-${crypto.createHash('sha256').update(`${tune ? 1 : 0}:${text}`).digest('hex').slice(0, 10)}`;
+    const row = await store.get(code);
+    if (!row) return { notFound: true };
+    if (!isAdmin(row.doc, pid)) throw new TorneoError('Eso lo puede hacer solo el admin del torneo.');
+    await store.putMap(code, id, text);
+    return mutate(code, (doc) => {
+      doc.maps = { ...(doc.maps || {}) };
+      if (!doc.maps[id] && Object.keys(doc.maps).length >= 20) throw new TorneoError('El torneo ya tiene 20 canchas propias.');
+      doc.maps[id] = { name: String(a.name || res.stadium.name || 'Cancha').slice(0, 40), tune };
+      return id;
+    });
+  }
+
   const roomIndex = new Map(); // código de sala → { code, match }
   /** La sala de un partido se cerró (se fue quien la corría, o terminó). */
   function roomClosed(roomCode) {
@@ -393,6 +436,15 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
         }
         return json(res, 503, { error: 'No se pudo crear el torneo. Probá de nuevo.' }), true;
       }
+      // Texto de una cancha propia del torneo (la baja la compu que arma cada partido).
+      if (parts.length === 5 && parts[3] === 'mapa' && CODE.test(code) && req.method === 'GET') {
+        const id = parts[4];
+        const row = await store.get(code);
+        const info = row?.doc.maps?.[id];
+        const text = info ? await store.getMap(code, id) : null;
+        if (!text) return json(res, 404, { error: 'No existe esa cancha en el torneo.' }), true;
+        return json(res, 200, { ok: true, id, name: info.name, tune: info.tune, text }), true;
+      }
       if (parts.length === 3 && CODE.test(code)) {
         if (req.method === 'GET') {
           const row = await store.get(code);
@@ -402,7 +454,12 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
         if (req.method === 'POST') {
           if (!pid) return json(res, 400, { error: 'Falta tu identificación (recargá la página).' }), true;
           if (!canAct(ip)) return json(res, 429, { error: 'Demasiados pedidos seguidos: esperá un momento.' }), true;
-          const body = await readBody(req);
+          const body = await readBody(req, MAP_MAX_BYTES + 32 * 1024);
+          if (body.action?.t === 'subir_cancha') {
+            const out = await uploadMap(code, pid, body.action);
+            if (out.notFound) return json(res, 404, { error: `No existe el torneo ${code}.` }), true;
+            return json(res, 200, { ok: true, result: { map: out.result }, torneo: view(out.doc, pid) }), true;
+          }
           if (['listo', 'sala_creada', 'marcador'].includes(body.action?.t)) {
             const row = await store.get(code);
             if (!row) return json(res, 404, { error: `No existe el torneo ${code}.` }), true;

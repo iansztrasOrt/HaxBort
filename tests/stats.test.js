@@ -116,3 +116,35 @@ describe('estadísticas del partido', () => {
     expect(statsSummary(S, m, { final: false }).mvp).toBe(null);
   });
 });
+
+describe('relator', () => {
+  it('tiro que termina en gol: un solo mensaje de gol con la asistencia', () => {
+    const { m, S, toca } = escena();
+    toca('r1', { x: 100, y: 0 });
+    toca('r2', { x: 250, y: 40, vx: 8, vy: -1, kick: true, hold: 1 });
+    for (let i = 0; i < 5; i += 1) updateStats(S, m, []);
+    updateStats(S, m, [{ type: 'goal', team: 'red', scorerId: 'r2', ownGoal: false }]);
+    m.phase = 'goal'; // como en el juego: después del gol, festejo
+    for (let i = 0; i < 60; i += 1) updateStats(S, m, []);
+    expect(S.feed).toEqual([{ type: 'goal', by: 'r2', assist: 'r1' }]);
+  });
+
+  it('tiro atajado: un mensaje de atajada que nombra al que pateó', () => {
+    const { m, S, toca, ticks } = escena();
+    toca('r1', { x: 250, y: 0, vx: 8, kick: true, hold: 1 });
+    ticks(10);
+    toca('b1', { x: 340, y: 0, hold: 1 });
+    ticks(60);
+    expect(S.feed).toEqual([{ type: 'save', by: 'b1', shooter: 'r1' }]);
+    expect(m).toBeTruthy();
+  });
+
+  it('tiro sin final: se cuenta como remate al arco o afuera (después de un instante)', () => {
+    const { S, toca, ticks } = escena();
+    toca('r1', { x: 250, y: 0, vx: 8, kick: true, hold: 1 });
+    ticks(10);
+    expect(S.feed).toEqual([]);
+    ticks(40);
+    expect(S.feed).toEqual([{ type: 'shot', by: 'r1', onTarget: true }]);
+  });
+});

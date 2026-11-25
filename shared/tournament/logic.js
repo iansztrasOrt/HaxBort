@@ -506,6 +506,7 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
       }
       if (a.format !== undefined) {
         const next = cleanFormat(a.format, t.format);
+        if (next.rules.map.startsWith('c-') && !t.maps?.[next.rules.map]) fail('Esa cancha no está subida al torneo.');
         if (t.status === 'inscripcion') {
           if (approved(t).length > next.maxTeams) fail(`Ya hay ${approved(t).length} equipos aprobados: el máximo no puede ser menos.`);
           if (t.teams.some((x) => x.members.length > next.teamSize)) fail('Hay equipos con más jugadores que eso: primero sacá jugadores.');
@@ -586,7 +587,8 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
 export function matchRules(t, match) {
   const r = t.format.rules;
   const allowDraw = t.format.type === 'liga' || (t.format.idaVuelta && !match.desempate);
-  return { time: r.time, score: r.score, ballRadius: r.ballRadius, map: r.map, allowDraw };
+  const own = r.map.startsWith('c-') ? t.maps?.[r.map] : null; // cancha propia del torneo (la compu que arma el partido la baja)
+  return { time: r.time, score: r.score, ballRadius: r.ballRadius, map: r.map, mapName: own?.name || null, mapTune: own ? own.tune !== false : false, allowDraw };
 }
 
 /** Carga (o corrige) el resultado de un partido y hace avanzar el torneo. Lo usan el admin y el servidor. */
