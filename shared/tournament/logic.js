@@ -24,6 +24,7 @@ export const DEFAULT_FORMAT = Object.freeze({
   maxTeams: 8,
   vueltas: 1, // liga: 1 = todos contra todos una vez; 2 = ida y vuelta; ...
   idaVuelta: false, // copa: cada llave a dos partidos (si empatan en el global, desempate a gol de oro)
+  publico: true, // aparece en la lista de torneos (si no, solo se entra con el código)
   inscripcion: { equipos: true, solos: true, unirse: true },
   rules: { time: 3, score: 3, ballRadius: null, map: 'clasica' },
 });
@@ -39,6 +40,7 @@ export function cleanFormat(f, base = DEFAULT_FORMAT) {
     maxTeams: int(src.maxTeams, 2, LIMITS.maxTeams, base.maxTeams),
     vueltas: int(src.vueltas, 1, LIMITS.maxVueltas, base.vueltas),
     idaVuelta: typeof src.idaVuelta === 'boolean' ? src.idaVuelta : base.idaVuelta,
+    publico: typeof src.publico === 'boolean' ? src.publico : base.publico !== false,
     inscripcion: {
       equipos: typeof ins.equipos === 'boolean' ? ins.equipos : base.inscripcion.equipos,
       solos: typeof ins.solos === 'boolean' ? ins.solos : base.inscripcion.solos,
@@ -647,6 +649,16 @@ export function leaders(t) {
   const list = [...acc.values()];
   const top = (k) => list.filter((x) => x[k] > 0).sort((p, q) => q[k] - p[k] || p.pj - q.pj).slice(0, 10).map((x) => ({ ...x, name: t.players[x.pid]?.name || 'Jugador', value: x[k] }));
   return { goles: top('g'), asistencias: top('a'), mvps: top('mvp') };
+}
+
+/** Lo que se muestra en la lista de torneos públicos. */
+export function listSummary(t) {
+  const ok = t.teams.filter((x) => x.status === 'aprobado');
+  return {
+    code: t.code, name: t.name, type: t.format.type, teamSize: t.format.teamSize, status: t.status,
+    teams: ok.length, maxTeams: t.format.maxTeams, players: Object.keys(t.players || {}).length,
+    champion: t.champion ? (teamById(t, t.champion)?.name || null) : null, updatedAt: t.updatedAt || t.createdAt,
+  };
 }
 
 /** Lo que ve cualquiera (no hay secretos en el documento: los jugadores se identifican con un hash). */

@@ -9,7 +9,7 @@
 
 import crypto from 'node:crypto';
 import { loadStadium } from '../shared/stadium/load.js';
-import { createTorneo, applyAction, publicView, newCode, TorneoError, findMatch, playable, teamById, matchRules, setResult, isAdmin } from '../shared/tournament/logic.js';
+import { createTorneo, applyAction, publicView, newCode, TorneoError, findMatch, playable, teamById, matchRules, setResult, isAdmin, listSummary } from '../shared/tournament/logic.js';
 
 // ---------------------------------------------------------------- guardado
 export class MemoryStore {
@@ -18,6 +18,9 @@ export class MemoryStore {
     this.kind = 'memoria';
   }
   async init() {}
+  async list(limit = 100) {
+    return [...this.rows.values()].map((r) => r.doc).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, limit).map((d) => structuredClone(d));
+  }
   async get(code) {
     const r = this.rows.get(code);
     return r ? { doc: structuredClone(r.doc), version: r.version } : null;
@@ -67,6 +70,10 @@ export class PgStore {
       text text NOT NULL,
       PRIMARY KEY (code, id)
     )`);
+  }
+  async list(limit = 100) {
+    const { rows } = await this.pool.query('SELECT doc FROM torneos ORDER BY updated_at DESC LIMIT $1', [limit]);
+    return rows.map((r) => r.doc);
   }
   async get(code) {
     const { rows } = await this.pool.query('SELECT doc, version FROM torneos WHERE code = $1', [code]);
@@ -422,6 +429,23 @@ export function createTorneosApi({ store, log = () => {}, rates = {} }) {
     const code = (parts[2] || '').toUpperCase();
     try {
       await ensure();
+      // Lista de torneos públicos (como la de salas): los que están en inscripción o en juego,
+      // y los terminados en los últimos 3 días.
+      if (parts.length === 2 && req.method === 'GET') {
+        const now = Date.now();
+        const docs = await store.list(150);
+        const torneos = docs
+          .filter((d) => d.format?.publico !== false)
+          .filter((d) => d.status !== 'terminado' || now - (d.updatedAt || 0) < 3 * 24 * 3600 * 1000)
+          .map((d) => {
+            const s = listSummary(d);
+            s.live = [...(live.get(d.code)?.values() || [])].filter((L) => L.session?.state === 'jugando').length;
+            return s;
+          })
+          .sort((a, b) => ({ inscripcion: 0, en_curso: 1, terminado: 2 }[a.status] - { inscripcion: 0, en_curso: 1, terminado: 2 }[b.status]) || b.updatedAt - a.updatedAt)
+          .slice(0, 60);
+        return json(res, 200, { ok: true, torneos }), true;
+      }
       if (parts.length === 2 && req.method === 'POST') {
         if (!pid) return json(res, 400, { error: 'Falta tu identificación (recargá la página).' }), true;
         if (!canCreate(ip)) return json(res, 429, { error: 'Creaste muchos torneos seguidos: esperá un rato.' }), true;

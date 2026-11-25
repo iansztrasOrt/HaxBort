@@ -92,6 +92,22 @@ for (const [kind, makeStore] of stores) {
       expect((await call(`/${c.code}/mapa/c-1111111111`)).status).toBe(404);
     });
 
+    it('lista de torneos públicos: aparecen los públicos, no los privados; el admin puede cambiarlo', async () => {
+      const pub = await call('', { key: K('lp1'), body: { name: 'Liga abierta', playerName: 'Ana', format: { type: 'liga', teamSize: 2, maxTeams: 6 } } });
+      const priv = await call('', { key: K('lp2'), body: { name: 'Copa secreta', format: { type: 'copa', publico: false } } });
+      await call(`/${pub.code}`, { key: K('lp3'), body: { playerName: 'Zoilo Quintana', action: { t: 'crear_equipo', name: 'Los Pibes' } } });
+      let list = (await call('')).torneos;
+      const row = list.find((x) => x.code === pub.code);
+      expect(row).toMatchObject({ name: 'Liga abierta', type: 'liga', teamSize: 2, status: 'inscripcion', teams: 0, maxTeams: 6, live: 0 });
+      expect(list.some((x) => x.code === priv.code)).toBe(false);
+      expect(JSON.stringify(list)).not.toContain('Zoilo Quintana'); // la lista no muestra jugadores
+      await call(`/${pub.code}`, { key: K('lp1'), body: { action: { t: 'editar', format: { publico: false } } } });
+      list = (await call('')).torneos;
+      expect(list.some((x) => x.code === pub.code)).toBe(false);
+      // Igual se puede entrar con el código
+      expect((await call(`/${pub.code}`)).torneo.name).toBe('Liga abierta');
+    });
+
     it('errores claros: sin identificación, torneo inexistente, pedido inválido', async () => {
       expect((await call('', { body: { name: 'x' } })).status).toBe(400);
       const nf = await call('/ZZZZZZ');

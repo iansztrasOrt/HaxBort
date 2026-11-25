@@ -263,6 +263,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
           maxTeams: Number(g('max').value),
           vueltas: Number(g('vueltas').value),
           idaVuelta: g('ida').checked,
+          publico: g('publico').value !== 'privado',
           inscripcion: { equipos: g('i-eq').checked, solos: g('i-solo').checked, unirse: g('i-unirse').checked },
           rules: { time: Number(String(g('time').value).replace(',', '.')), score: Number(g('score').value), ballRadius: ball === '' ? null : Number(ball), map: g('map').value },
         },
@@ -287,6 +288,8 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
         el('label', { class: 'field' }, 'Jugadores por equipo', el('input', { class: 'input', id: id('size'), type: 'number', min: '1', max: '8', step: '1', value: String(f.teamSize), disabled: locked ? 'disabled' : null })),
         el('label', { class: 'field' }, 'Máximo de equipos', el('input', { class: 'input', id: id('max'), type: 'number', min: '2', max: '32', step: '1', value: String(f.maxTeams) }))),
       typeHint, ligaRow, copaRow,
+      el('label', { class: 'field' }, 'Privacidad', el('select', { id: id('publico') },
+        opt('publico', 'Público: aparece en la lista de torneos', f.publico !== false), opt('privado', 'Privado: solo se entra con el código', f.publico === false))),
       el('h3', { text: 'Cómo se puede anotar la gente' }),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', id: id('i-eq'), checked: f.inscripcion.equipos ? 'checked' : null }), ' Como equipo: un capitán lo arma y les pasa un código a sus compañeros'),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', id: id('i-unirse'), checked: f.inscripcion.unirse ? 'checked' : null }), ' Pidiendo entrar a un equipo que tenga lugar (lo acepta el capitán)'),
@@ -308,7 +311,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     const body = root();
     body.replaceChildren();
     const mine = readMine();
-    const defaults = { type: 'liga', teamSize: 3, maxTeams: 8, vueltas: 1, idaVuelta: false, inscripcion: { equipos: true, solos: true, unirse: true }, rules: { time: 3, score: 3, ballRadius: null, map: 'clasica' } };
+    const defaults = { type: 'liga', teamSize: 3, maxTeams: 8, vueltas: 1, idaVuelta: false, publico: true, inscripcion: { equipos: true, solos: true, unirse: true }, rules: { time: 3, score: 3, ballRadius: null, map: 'clasica' } };
     const create = formatForm(defaults, {
       submitLabel: 'Crear torneo',
       withName: '',
@@ -339,11 +342,42 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
           if (codeInput.value.length === 6) open(codeInput.value);
           else toast('El código del torneo tiene 6 letras o números.');
         } }, codeInput, el('button', { class: 'btn big', type: 'submit' }, 'Ver torneo')),
+        el('div', { class: 'row', style: 'justify-content:space-between' }, el('h3', { text: 'Torneos públicos' }),
+          el('button', { class: 'btn ghost', type: 'button', style: 'min-height:30px', onclick: () => loadPublic() }, '↻ Actualizar')),
+        el('div', { class: 'rooms-list', id: 'torneos-public' }, el('p', { class: 'small muted', text: 'Cargando…' })),
         el('h3', { text: 'Mis torneos' }),
         mine.length ? el('div', { class: 'rooms-list' }, ...mine.map((m) => el('button', { type: 'button', class: 'room-row', onclick: () => open(m.code) },
           el('span', {}, el('strong', { text: m.name }), el('br'), el('span', { class: 'meta', text: `${m.type === 'copa' ? 'Copa' : 'Liga'} · ${m.code}` })),
           el('span', { class: 'meta', text: '' }), el('span', { class: 'count', text: '›' }))))
           : el('p', { class: 'small muted', text: 'Todavía no estás en ningún torneo. Creá uno o entrá con el código que te pasaron.' }))));
+    loadPublic();
+  }
+
+  // ---- lista de torneos públicos (como la de salas): se actualiza sola cada 10 s mientras la mirás
+  const PUBLIC_STATUS = { inscripcion: 'inscripción abierta', en_curso: 'en juego', terminado: 'terminado' };
+  let publicTimer = 0;
+  async function loadPublic() {
+    clearTimeout(publicTimer);
+    const box = $('torneos-public');
+    if (!box || state.code || $('scr-torneos').hidden) return;
+    try {
+      const data = await api('');
+      if (!$('torneos-public') || state.code) return;
+      box.replaceChildren();
+      if (!data.torneos.length) box.append(el('p', { class: 'small muted', text: 'No hay torneos públicos ahora. ¡Creá uno!' }));
+      for (const x of data.torneos) {
+        const bits = [x.type === 'copa' ? 'Copa' : 'Liga', `${x.teamSize} vs ${x.teamSize}`, PUBLIC_STATUS[x.status] || x.status];
+        if (x.live) bits.push(`● ${x.live} partido${x.live === 1 ? '' : 's'} en juego`);
+        if (x.champion) bits.push(`🏆 ${x.champion}`);
+        box.append(el('button', { type: 'button', class: `room-row tpub ${x.status}`, onclick: () => open(x.code) },
+          el('span', {}, el('strong', { text: x.name }), el('br'), el('span', { class: 'meta', text: bits.join(' · ') })),
+          el('span', { class: 'meta', text: x.code }),
+          el('span', { class: 'count', text: `${x.teams}/${x.maxTeams}`, title: 'Equipos aprobados / máximo' })));
+      }
+    } catch (e) {
+      box.replaceChildren(el('p', { class: 'small muted', text: e.message }));
+    }
+    publicTimer = setTimeout(loadPublic, 10000);
   }
 
   // ---------------------------------------------------------------- torneo
