@@ -79,7 +79,7 @@ function toast(msg, ms = 3200) {
 }
 
 const EXTRAP = { min: -200, max: 200, def: 0 }; // ms, solo afecta cómo se dibuja en esta pantalla
-const prefs = { zoom: 1, sound: true, extrapolation: EXTRAP.def, ...readJSON(localStorage, K.prefs, {}) };
+const prefs = { zoom: 1, sound: true, relator: true, extrapolation: EXTRAP.def, ...readJSON(localStorage, K.prefs, {}) };
 if (!Number.isInteger(prefs.extrapolation) || prefs.extrapolation < EXTRAP.min || prefs.extrapolation > EXTRAP.max) prefs.extrapolation = EXTRAP.def;
 const savePrefs = () => writeJSON(localStorage, K.prefs, prefs);
 let profile = { name: '', avatar: '', ...readJSON(localStorage, K.profile, {}) };
@@ -1488,7 +1488,9 @@ function renderChat() {
   log.replaceChildren();
   const full = app.roomOpen || $('chat').classList.contains('open');
   const now = performance.now();
-  for (const m of chat.slice(full ? -80 : -8)) {
+  // (con el relator apagado no se muestran sus mensajes; al prenderlo vuelven a verse)
+  const items = prefs.relator ? chat : chat.filter((m) => m.id !== 'relator');
+  for (const m of items.slice(full ? -80 : -8)) {
     const old = !full && now - m.at > 10000;
     const li = el('li', { class: `${m.t === 'chat' ? m.team || 'spectator' : m.t}${old ? ' old' : ''}` });
     if (m.t === 'chat') li.append(el('b', { text: `${m.name}: ` }), m.text);
@@ -1541,6 +1543,7 @@ function submitChat(e) {
     const c = norm(text.split(/\s+/)[0]);
     if (c === '/zoom') setZoom(Number(text.split(/\s+/)[1]) || 1);
     else if (c === '/extrapolation' || c === '/extrapolacion') extrapolationCommand(text.split(/\s+/).slice(1).join(' '));
+    else if (c === '/relator') setRelator(!prefs.relator);
     else if (c === '/limpiar' || c === '/clear') {
       chat.length = 0;
       renderChat();
@@ -1680,6 +1683,18 @@ async function importFiles(files) {
     if (f.size > 1024 * 1024) importText('', `${f.name} (${fmtKB(f.size)})`);
     else importText(await f.text(), f.name);
   }
+}
+
+/** Relator del chat: prendido o apagado (preferencia de cada jugador, se guarda en su compu). */
+function setRelator(on, { quiet = false } = {}) {
+  prefs.relator = Boolean(on);
+  savePrefs();
+  $('relator-label').textContent = `Relator: ${prefs.relator ? 'sí' : 'no'}`;
+  $('btn-relator').classList.toggle('on', prefs.relator);
+  $('btn-relator').setAttribute('aria-pressed', String(prefs.relator));
+  $('opt-relator').checked = prefs.relator;
+  renderChat();
+  if (!quiet) toast(prefs.relator ? 'Relator prendido.' : 'Relator apagado (solo para vos).', 1600);
 }
 
 /** Guarda en tu biblioteca la cancha que se está usando en la sala (sirve para otras salas y para torneos). */
@@ -2055,6 +2070,9 @@ function bind() {
     setKeys(DEFAULT_KEYS);
     toast('Controles restablecidos.', 1500);
   });
+  $('btn-relator').addEventListener('click', () => setRelator(!prefs.relator));
+  $('opt-relator').addEventListener('change', (e) => setRelator(e.target.checked));
+  setRelator(prefs.relator, { quiet: true });
   $('opt-sound').checked = prefs.sound;
   $('opt-sound').addEventListener('change', (e) => {
     prefs.sound = e.target.checked;

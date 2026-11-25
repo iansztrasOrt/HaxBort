@@ -839,7 +839,7 @@ export class Room {
         [
           '/avatar XX — tu avatar (1 o 2 caracteres)', '/rojo · /azul · /espectador — cambiarte de equipo',
           'Admin: /empezar · /parar · /pausa · /mezclar · /auto · /bloquear', 'Admin: /mapa nombre · /goles N · /tiempo N · /pelota N · /bot rojo|azul',
-          'Admin: /echar nombre · /ban nombre · /admin nombre · /clave texto (vacío = sin clave)', 'En tu pantalla: /zoom N · /limpiar · /extrapolation [ms|default]',
+          'Admin: /echar nombre · /ban nombre · /admin nombre · /clave texto (vacío = sin clave)', 'En tu pantalla: /zoom N · /limpiar · /relator (prende/apaga) · /extrapolation [ms|default]',
         ].forEach((h) => this.tell(me.id, h, 'help'));
         return true;
       case 'avatar': return act({ t: 'avatar', text: arg });

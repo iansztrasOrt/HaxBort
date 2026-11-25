@@ -422,6 +422,8 @@ body:not(.outside) .version-tag { display: none; }
 .tleader { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 6px; align-content: start; min-width: 0; }
 .tleader td:nth-child(2) { text-align: left; }
 .room-cfg { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
+/* La biblioteca es parte de la ventana (que scrollea entera), no una cajita con su propio scroll. */
+.lib-list { display: grid; gap: 10px; }
 .maps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .map-card { background: var(--panel-2); border: 2px solid transparent; border-radius: 10px; padding: 6px; display: grid; gap: 4px; cursor: pointer; text-align: left; color: var(--chalk); font: inherit; }
 .map-card:hover { border-color: var(--line); }
@@ -645,6 +647,7 @@ body.touch-on .hint { display: none; }
         <button class="btn" type="button" id="btn-lock" title="Si está bloqueado, solo el admin cambia equipos"><span class="ic">🔓</span><span id="lock-label">Bloquear</span></button>
         <button class="btn" type="button" id="btn-reset" title="Manda a todos a espectadores"><span class="ic">↺</span>Reiniciar</button>
         <button class="btn" type="button" id="btn-kits" title="Camisetas de los equipos"><span class="ic">👕</span>Camisetas</button>
+        <button class="btn" type="button" id="btn-relator" title="Prender o apagar el relator del chat (solo para vos)" aria-pressed="true"><span class="ic">🎙️</span><span id="relator-label">Relator: sí</span></button>
       </div>
       <div class="teams" id="teams"></div>
     </div>
@@ -691,7 +694,7 @@ body.touch-on .hint { display: none; }
       <div class="maps-grid" id="maps-builtin"></div>
       <div class="row" style="justify-content:space-between"><h3>Mi biblioteca</h3><span class="small muted" id="lib-count"></span></div>
       <input class="input" id="lib-search" type="search" placeholder="Buscar por nombre o autor" aria-label="Buscar mapas">
-      <div id="lib-list" class="panel" style="padding:0"></div>
+      <div id="lib-list" class="lib-list"></div>
       <p class="note">Tu biblioteca se guarda en este navegador. Al elegir un mapa propio, el servidor lo revisa y se lo manda a todos los de la sala.</p>
     </div>
     <div class="panel" data-panel="import" hidden>
@@ -734,6 +737,7 @@ body.touch-on .hint { display: none; }
         <select id="bot-skill"><option value="0.55">Tranqui</option><option value="0.8" selected>Normal</option><option value="0.97">Picante</option></select>
       </label>
       <label class="check"><input type="checkbox" id="opt-sound" checked> Sonidos</label>
+      <label class="check"><input type="checkbox" id="opt-relator" checked> Relator en el chat (goles, asistencias, atajadas y tiros)</label>
       <div id="room-cfg" class="room-cfg" hidden>
         <h3>Sala (solo el admin)</h3>
         <label class="field">Privacidad
