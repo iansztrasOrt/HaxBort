@@ -134,3 +134,22 @@ describe('relator en la sala', () => {
     expect(sent.some((x) => x.msg.t === 'sys' && /¡Gol de/.test(x.msg.text))).toBe(false);
   });
 });
+
+describe('camisetas en el partido de torneo', () => {
+  it('si los dos equipos tienen camisetas parecidas, el visitante usa una alternativa (y se avisa)', async () => {
+    const { kitsTooSimilar } = await import('../shared/game/kits.js');
+    const same = { pattern: 'liso', colors: ['d62828', 'ffffff', '000000'], angle: 0, text: 'ffffff', border: '0b0f10' };
+    const { room, sent } = sala({ home: { name: 'Rojos', kit: same }, away: { name: 'Otros rojos', kit: { ...same, colors: ['e5574a', 'ffffff', '000000'] } } });
+    expect(room.settings.kits.red).toMatchObject({ colors: same.colors });
+    expect(kitsTooSimilar(room.settings.kits.red, room.settings.kits.blue)).toBe(false);
+    for (const tk of ['tk-local-1', 'tk-local-2', 'tk-visita-1', 'tk-visita-2']) room.addMember({ name: tk, ticket: tk });
+    ticks(room, 4 * TICK_RATE);
+    expect(sent.some((x) => x.msg.t === 'sys' && /alternativa/.test(x.msg.text))).toBe(true);
+  });
+
+  it('si son distintas, cada uno juega con la suya', () => {
+    const { room } = sala();
+    expect(room.settings.kits.red.pattern).toBe('bastones');
+    expect(room.torneo.awayAlt).toBeFalsy();
+  });
+});

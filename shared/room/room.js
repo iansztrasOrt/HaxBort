@@ -11,7 +11,7 @@ import { createMatch, withBallRadius, addPlayer, removePlayer, setTeam, setInput
 import { botInput } from '../game/bot.js';
 import { BUILTIN_MAPS } from '../builtinMaps.js';
 import { snapshotBody, withAck } from '../net/protocol.js';
-import { DEFAULT_KITS, cleanKit } from '../game/kits.js';
+import { DEFAULT_KITS, cleanKit, randomKit, kitsTooSimilar } from '../game/kits.js';
 import { createStats, updateStats, statsSummary } from '../game/stats.js';
 
 export const MAX_PLAYERS = 30;
@@ -67,7 +67,9 @@ export class Room {
     this.offline = offline;
     this.transport = transport;
     this.members = new Map();
-    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kits: { red: { ...DEFAULT_KITS.red }, blue: { ...DEFAULT_KITS.blue } } }; // ballRadius null = el del estadio
+    // Camisetas al azar (Rojo cálida, Azul fría, nunca parecidas) hasta que el admin elija otras.
+    const red = randomKit('red');
+    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kits: { red, blue: randomKit('blue', Math.random, red) } }; // ballRadius null = el del estadio
     this.locked = false;
     this.paused = false;
     this.botSkill = 0.8;
@@ -90,7 +92,7 @@ export class Room {
    * minuto, si hay al menos uno por equipo), solo se pausa con 3 votos y nadie lo puede terminar.
    */
   setupTorneo(cfg) {
-    const kit = (k, team) => cleanKit(k, DEFAULT_KITS[team]) || { ...DEFAULT_KITS[team] };
+    const kit = (k, team) => (k ? cleanKit(k, DEFAULT_KITS[team]) : null) || randomKit(team);
     const tickets = {};
     for (const [ticket, info] of Object.entries(cfg.tickets || {})) {
       if (typeof ticket === 'string' && ticket.length >= 8 && info && (info.team === 'red' || info.team === 'blue')) tickets[ticket] = { team: info.team, pid: String(info.pid || '') };
@@ -107,7 +109,16 @@ export class Room {
       this.settings.scoreLimit = r.score;
       this.settings.ballRadius = r.ball;
     }
-    this.settings.kits = { red: kit(cfg.home?.kit, 'red'), blue: kit(cfg.away?.kit, 'blue') };
+    const home = kit(cfg.home?.kit, 'red');
+    const away = (cfg.away?.kit ? cleanKit(cfg.away.kit, DEFAULT_KITS.blue) : null) || randomKit('blue', Math.random, home);
+    this.settings.kits = { red: home, blue: away };
+    // Si las camisetas de los dos equipos se parecen, el visitante juega con una alternativa que contraste.
+    if (kitsTooSimilar(this.settings.kits.red, this.settings.kits.blue)) {
+      let alt = randomKit('blue', Math.random, this.settings.kits.red);
+      if (kitsTooSimilar(alt, this.settings.kits.red)) alt = randomKit('red', Math.random, this.settings.kits.red);
+      this.settings.kits.blue = alt;
+      this.torneo.awayAlt = true;
+    }
     let mapOk = false;
     if (typeof rules.mapText === 'string' && rules.mapText) mapOk = this.setMap({ key: `t:${cleanText(rules.map, 20)}`, text: rules.mapText, tune: Boolean(rules.mapTune) }).ok; // cancha propia del torneo
     if (!mapOk && typeof rules.map === 'string' && BUILTIN_MAPS.some((b) => b.id === rules.map)) mapOk = this.setBuiltinMap(rules.map).ok;
@@ -128,7 +139,7 @@ export class Room {
       if ((all && t.wait >= 3 * TICK_RATE) || (t.wait >= 60 * TICK_RATE && here('red') && here('blue'))) {
         t.state = 'jugando';
         this.start();
-        this.sys(`¡Arranca el partido! ${t.home.name} vs ${t.away.name}.`);
+        this.sys(`¡Arranca el partido! ${t.home.name} vs ${t.away.name}.${t.awayAlt ? ` (Las camisetas se parecían: ${t.away.name} juega con la alternativa.)` : ''}`);
       }
     } else if (t.state === 'jugando' && this.paused) {
       t.pauseTicks += 1;
@@ -704,8 +715,11 @@ export class Room {
         if (!admin) return deny();
         const team = msg.team === 'blue' ? 'blue' : msg.team === 'red' ? 'red' : null;
         if (!team) return true;
-        const kit = msg.reset ? { ...DEFAULT_KITS[team] } : cleanKit(msg.kit, this.settings.kits[team]);
+        const other = this.settings.kits[team === 'red' ? 'blue' : 'red'];
+        // "Restablecer" (o la predeterminada): otra al azar, distinta de la del otro equipo.
+        const kit = msg.reset ? randomKit(team, Math.random, other) : cleanKit(msg.kit, this.settings.kits[team]);
         if (!kit) return this.tell(id, 'Esa camiseta no es válida.');
+        if (kitsTooSimilar(kit, other)) return this.tell(id, `Esa camiseta se parece mucho a la del ${team === 'red' ? 'Azul' : 'Rojo'}: elegí otra para que no se confundan.`);
         this.settings.kits = { ...this.settings.kits, [team]: kit };
         this.dirty = true;
         return true;

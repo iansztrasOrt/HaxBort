@@ -2,7 +2,7 @@
 // El servidor guarda un documento por torneo y lo cambia SOLO con applyAction(), que valida
 // quién pide qué. Así la misma lógica se prueba con tests y corre igual en el servidor.
 
-import { cleanKit, DEFAULT_KITS } from '../game/kits.js';
+import { cleanKit, DEFAULT_KITS, randomKit } from '../game/kits.js';
 
 export const LIMITS = { name: 40, teamName: 24, playerName: 20, maxTeams: 32, maxTeamSize: 8, maxSolos: 128, maxVueltas: 4 };
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -347,7 +347,7 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
       const color = t.teams.length % 2 ? 'blue' : 'red';
       const team = {
         id: nextId(t, 'e'), name, captain: pid, members: [pid], requests: [], status: 'pendiente',
-        open: a.open !== false, joinCode: uniqueTeamCode(t, rng), kit: cleanKit(a.kit, DEFAULT_KITS[color]) || { ...DEFAULT_KITS[color] },
+        open: a.open !== false, joinCode: uniqueTeamCode(t, rng), kit: (a.kit ? cleanKit(a.kit, DEFAULT_KITS[color]) : null) || randomKit(color, rng), // sin elegir: una al azar
       };
       t.teams.push(team);
       log(t, `${who} anotó al equipo ${name} (falta que el admin lo apruebe).`, now);
@@ -489,7 +489,7 @@ export function applyAction(t, actor, action, { now = Date.now(), rng = Math.ran
         const color = t.teams.length % 2 ? 'blue' : 'red';
         t.teams.push({
           id: nextId(t, 'e'), name: `Equipo ${k}`, captain: members[0], members, requests: [], status: 'aprobado',
-          open: false, joinCode: uniqueTeamCode(t, rng), kit: { ...DEFAULT_KITS[color] },
+          open: false, joinCode: uniqueTeamCode(t, rng), kit: randomKit(color, rng),
         });
         made += 1;
       }

@@ -10,7 +10,7 @@ import { createWorld, step as physicsStep } from '../shared/physics/world.js';
 import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
 import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protocol.js';
 import { createRenderer, drawKit, drawDiscLabel } from './render.js';
-import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS } from '../shared/game/kits.js';
+import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS, readableOn } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
 import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker, pageBuild } from './net.js';
 import { createTorneosUI, postTorneo } from './torneos.js';
@@ -1219,7 +1219,7 @@ function renderKits() {
     panel.append(el('div', { class: `kit-col ${team}` },
       el('div', { class: 'kit-top' }, el('div', { class: 'kit-preview' }, kitCanvas(kit, 48, sample)),
         el('div', {}, el('h3', { text: TEAM_ES[team] }), el('p', { class: 'small muted', text: `${pattern.name}` }),
-          admin ? el('button', { type: 'button', class: 'btn ghost', style: 'min-height:30px', onclick: () => { delete kitDraft[team]; act({ t: 'kit', team, reset: true }); } }, 'Restablecer') : null)),
+          admin ? el('button', { type: 'button', class: 'btn ghost', style: 'min-height:30px', onclick: () => { delete kitDraft[team]; act({ t: 'kit', team, reset: true }); } }, '🎲 Al azar') : null)),
       el('span', { class: 'kit-sub', text: 'Modelos' }), presets,
       el('span', { class: 'kit-sub', text: 'Diseño' }), patterns,
       el('span', { class: 'kit-sub', text: 'Colores' }), colors, angle));
@@ -1257,6 +1257,18 @@ function updateHud() {
   const m = app.match;
   $('s-red').textContent = m.score.red;
   $('s-blue').textContent = m.score.blue;
+  // El marcador con el color de cada camiseta: se ve de un vistazo quién es quién.
+  const kits = app.room?.settings?.kits;
+  for (const team of ['red', 'blue']) {
+    const c = kits?.[team]?.colors?.[0];
+    const box = $(team === 'red' ? 's-red' : 's-blue');
+    const bg = c ? `#${c}` : '';
+    if (box.dataset.bg !== bg) {
+      box.dataset.bg = bg;
+      box.style.background = bg;
+      box.style.color = c ? `#${readableOn(c)}` : '';
+    }
+  }
   $('clock').textContent = formatClock(m);
   $('clock').classList.toggle('ot', m.overtime);
 }

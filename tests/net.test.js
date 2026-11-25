@@ -390,19 +390,52 @@ describe('camisetas y privacidad', async () => {
     expect(KIT_PATTERNS.length).toBeGreaterThanOrEqual(15);
   });
 
-  it('solo el admin cambia la camiseta; todos la reciben en el estado; se puede restablecer', () => {
-    const { room } = fakeRoom();
+  it('solo el admin cambia la camiseta; todos la reciben en el estado; "Al azar" da otra distinta', async () => {
+    const { kitsTooSimilar } = await import('../shared/game/kits.js');
+    const { room, sent } = fakeRoom();
     const a = room.addMember({ name: 'A' }).id;
     const b = room.addMember({ name: 'B' }).id;
+    room.handle(a, { t: 'kit', team: 'blue', kit: { pattern: 'liso', colors: ['143d8c', '143d8c', '143d8c'], text: 'ffffff' } }); // azul oscuro fijo
+    const before = { ...room.settings.kits.red };
     room.handle(b, { t: 'kit', team: 'red', kit: { pattern: 'cuadros' } });
-    expect(room.settings.kits.red.pattern).toBe('liso');
+    expect(room.settings.kits.red).toEqual(before);
     room.handle(a, { t: 'kit', team: 'red', kit: { pattern: 'cuadros', colors: ['111111', 'ffffff', '000000'] } });
     expect(room.state().settings.kits.red).toMatchObject({ pattern: 'cuadros', colors: ['111111', 'ffffff', '000000'] });
-    expect(room.settings.kits.blue).toEqual(DEFAULT_KITS.blue);
-    room.handle(a, { t: 'kit', team: 'red', reset: true });
-    expect(room.settings.kits.red).toEqual(DEFAULT_KITS.red);
+    for (let i = 0; i < 30; i += 1) {
+      room.handle(a, { t: 'kit', team: 'blue', reset: true });
+      expect(kitsTooSimilar(room.settings.kits.blue, room.settings.kits.red)).toBe(false);
+    }
+    // Una casi igual a la del otro equipo se rechaza
+    const copy = { ...room.settings.kits.blue };
+    room.handle(a, { t: 'kit', team: 'red', kit: copy });
+    expect(room.settings.kits.red.pattern).toBe('cuadros');
+    expect([...sent].reverse().find((x) => x.id === a && x.msg.t === 'sys').msg.text).toMatch(/se parece mucho/);
   });
 
+  it('camisetas iniciales al azar: Rojo con colores cálidos, Azul con fríos, nunca parecidas', async () => {
+    const { kitsTooSimilar, luminance } = await import('../shared/game/kits.js');
+    const hue = (h) => {
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+      const mx = Math.max(r, g, b); const mn = Math.min(r, g, b); const d = mx - mn;
+      if (!d) return null;
+      const x = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return (x * 60 + 360) % 360;
+    };
+    const seen = new Set();
+    for (let i = 0; i < 200; i += 1) {
+      const { room } = fakeRoom();
+      const { red, blue } = room.settings.kits;
+      expect(kitsTooSimilar(red, blue)).toBe(false);
+      const hr = hue(red.colors[0]);
+      const hb = hue(blue.colors[0]);
+      expect(hr <= 60 || hr >= 300).toBe(true); // rojos, naranjas, amarillos, fucsias
+      expect(hb >= 120 && hb <= 300).toBe(true); // verdes, celestes, azules, violetas
+      expect(red.text === '111111' || red.text === 'ffffff').toBe(true);
+      expect(luminance(red.colors[0])).toBeGreaterThanOrEqual(0);
+      seen.add(`${red.pattern}:${red.colors[0]}`);
+    }
+    expect(seen.size).toBeGreaterThan(30); // de verdad al azar
+  });
   it('privacidad: pública/privada, contraseña y cupo, solo el admin', () => {
     const { room, sent } = fakeRoom({ maxPlayers: 10 });
     const a = room.addMember({ name: 'A' }).id;

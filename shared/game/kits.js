@@ -67,3 +67,57 @@ export function cleanKit(kit, base) {
   const angle = Number.isFinite(Number(kit.angle)) ? ((Math.round(Number(kit.angle)) % 360) + 360) % 360 : b.angle;
   return { pattern, colors, angle, text: hex(kit.text, b.text), border: hex(kit.border, b.border) };
 }
+
+// ---------------------------------------------------------------- camisetas al azar (y que no se parezcan)
+// Rojo siempre con colores cálidos y Azul con fríos: así nunca se confunden entre sí ni con su lado.
+const WARM = ['e5574a', 'd62828', 'f28c28', 'f5d50a', 'e0218a', '7b1e2b', 'ff7a3d', 'c2185b', 'ffb300', 'b71c1c'];
+const COOL = ['3f7be0', '143d8c', '75aadb', '1f8a4c', '5b2a86', '00a6a6', '2b2d8f', '26a69a', '7e57c2', '0d47a1'];
+const NEUTRAL = ['ffffff', '111111', 'f4f1de', '2b2b2b'];
+const RANDOM_PATTERNS = KIT_PATTERNS.map((p) => p.id).filter((id) => id !== 'degradado'); // el degradado mezcla demasiado
+
+const rgb = (h) => [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+export function luminance(h) {
+  const [r, g, b] = rgb(h).map((v) => v / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+/** Color del número que se lee bien sobre un fondo. */
+export const readableOn = (h) => (luminance(h) > 0.55 ? '111111' : 'ffffff');
+const dist = (a, b) => {
+  const [r1, g1, b1] = rgb(a);
+  const [r2, g2, b2] = rgb(b);
+  const rm = (r1 + r2) / 2; // distancia "redmean": se parece más a cómo vemos los colores
+  return Math.sqrt((2 + rm / 256) * (r1 - r2) ** 2 + 4 * (g1 - g2) ** 2 + (2 + (255 - rm) / 256) * (b1 - b2) ** 2);
+};
+
+/** Colores que más se ven de una camiseta (los que ocupan la mayor parte de la bolita). */
+export function mainColors(k) {
+  const [a, b, c] = k.colors;
+  if (['mitades', 'cuartos', 'cuadros', 'bastones'].includes(k.pattern)) return [a, b];
+  if (k.pattern === 'franjas' || k.pattern === 'degradado') return [a, b, c];
+  return [a];
+}
+
+/** ¿Dos camisetas se pueden confundir? (algún color principal casi igual) */
+export function kitsTooSimilar(x, y) {
+  if (!x || !y) return false;
+  for (const a of mainColors(x)) for (const b of mainColors(y)) if (dist(a, b) < 150) return true;
+  return false;
+}
+
+/** Una camiseta al azar para ese lado (cálida para Rojo, fría para Azul), distinta de `avoid`. */
+export function randomKit(team, rng = Math.random, avoid = null) {
+  const pick = (list) => list[Math.floor(rng() * list.length)];
+  const fam = team === 'blue' ? COOL : WARM;
+  let kit = null;
+  for (let i = 0; i < 40; i += 1) {
+    const pattern = pick(RANDOM_PATTERNS);
+    const main = pick(fam);
+    const second = pick(rng() < 0.65 ? NEUTRAL : fam.filter((c) => dist(c, main) > 120));
+    const third = pick([...NEUTRAL, ...fam]);
+    const angle = pick([0, 0, 0, 45, 90, 135]);
+    const under = pattern === 'centro' || pattern === 'estrella' ? second : main; // lo que queda debajo del número
+    kit = { pattern, colors: [main, second, third], angle, text: readableOn(under), border: '0b0f10' };
+    if (!kitsTooSimilar(kit, avoid)) return kit;
+  }
+  return kit;
+}
