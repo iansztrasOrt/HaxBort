@@ -72,7 +72,7 @@ export class Room {
     this.members = new Map();
     // Camisetas al azar (Rojo cálida, Azul fría, nunca parecidas) hasta que el admin elija otras.
     const red = randomKit('red');
-    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kickStrength: null, kits: { red, blue: randomKit('blue', Math.random, red) } }; // ballRadius null = el del estadio
+    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kickStrength: null, strongFirst: true, kits: { red, blue: randomKit('blue', Math.random, red) } }; // ballRadius null = el del estadio
     this.locked = false;
     this.paused = false;
     this.botSkill = 0.8;
@@ -814,6 +814,12 @@ export class Room {
         if (typeof msg.isPublic === 'boolean' && msg.isPublic !== this.isPublic) {
           this.isPublic = msg.isPublic;
           this.sys(this.isPublic ? 'La sala ahora es pública: aparece en la lista de salas.' : 'La sala ahora es privada: solo se entra con el código.');
+        }
+        if (typeof msg.strongFirst === 'boolean' && msg.strongFirst !== this.settings.strongFirst) {
+          // Se puede cambiar en cualquier momento: vale desde la próxima patada.
+          this.settings.strongFirst = msg.strongFirst;
+          this.match.settings.strongFirst = msg.strongFirst;
+          this.sys(msg.strongFirst ? 'Golpeo de primera fuerte: sí (con el espacio mantenido, la patada sale más fuerte).' : 'Golpeo de primera fuerte: no (todas las patadas iguales).');
         }
         if (typeof msg.password === 'string') {
           const pw = cleanText(msg.password, 20);

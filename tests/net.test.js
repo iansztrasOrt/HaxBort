@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { loadStadium } from '../shared/stadium/load.js';
-import { createMatch, addPlayer, startMatch, tick, setInput, INPUT } from '../shared/game/match.js';
+import { createMatch, addPlayer, startMatch, tick, setInput, INPUT, FIRST_TIME_BOOST } from '../shared/game/match.js';
 import { botInput } from '../shared/game/bot.js';
 import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
 import { snapshotBody, withAck, decodeSnapshot, applySnapshot, encodeInput, decodeInput } from '../shared/net/protocol.js';
@@ -503,5 +503,74 @@ describe('fuerza de la patada', () => {
     const b = room.addMember({ name: 'Bruno' }).id;
     room.handle(a, { t: 'chat', text: '/kick Bruno' });
     expect(room.members.has(b)).toBe(false);
+  });
+});
+
+describe('golpeo de primera fuerte', () => {
+  // El jugador espera con la patada apretada y la pelota le llega (de primera),
+  // o aprieta recién cuando la tiene al lado (normal). Devuelve la velocidad de la pelota.
+  function shot(room, id, { held }) {
+    room.moveTo(id, 'red');
+    room.start();
+    const m = room.match;
+    const p = m.players.find((x) => x.id === id);
+    const ball = m.world.discs.find((d) => d.kind === 'ball');
+    m.phase = 'playing';
+    Object.assign(p.disc, { x: -60, y: 0, vx: 0, vy: 0 });
+    let seq = 0;
+    if (held) {
+      // Patada apretada con la pelota lejos: todavía no patea.
+      Object.assign(ball, { x: 100, y: 0, vx: 0, vy: 0 });
+      for (let i = 0; i < 3; i += 1) {
+        room.input(id, [{ seq: ++seq, bits: INPUT.kick }]);
+        room.step();
+      }
+      expect(Math.hypot(ball.vx, ball.vy)).toBe(0);
+    }
+    Object.assign(ball, { x: p.disc.x + p.disc.r + ball.r + 1, y: 0, vx: 0, vy: 0 });
+    Object.assign(p.disc, { vx: 0, vy: 0 });
+    room.input(id, [{ seq: ++seq, bits: INPUT.kick }]);
+    room.step();
+    return Math.hypot(ball.vx, ball.vy);
+  }
+  const fresh = () => { const { room } = fakeRoom(); const a = room.addMember({ name: 'A' }).id; return { room, a }; };
+
+  it('viene activado: de primera sale un 25% más fuerte; apretando con la pelota al lado, igual que antes', () => {
+    const x = fresh();
+    expect(x.room.settings.strongFirst).toBe(true);
+    const normal = shot(x.room, x.a, { held: false });
+    const y = fresh();
+    const primera = shot(y.room, y.a, { held: true });
+    expect(normal).toBeGreaterThan(1);
+    expect(primera / normal).toBeCloseTo(FIRST_TIME_BOOST, 5);
+  });
+
+  it('desactivado: todas las patadas iguales', () => {
+    const x = fresh();
+    const normal = shot(x.room, x.a, { held: false });
+    const y = fresh();
+    y.room.handle(y.a, { t: 'roomcfg', strongFirst: false });
+    expect(y.room.state().settings.strongFirst).toBe(false);
+    expect(shot(y.room, y.a, { held: true })).toBeCloseTo(normal, 9);
+  });
+
+  it('solo el admin lo cambia, se puede en pleno partido y viaja en la foto', () => {
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    const b = room.addMember({ name: 'B' }).id;
+    room.moveTo(a, 'red');
+    room.start();
+    room.handle(b, { t: 'roomcfg', strongFirst: false });
+    expect(room.settings.strongFirst).toBe(true);
+    room.handle(a, { t: 'roomcfg', strongFirst: false });
+    expect(room.settings.strongFirst).toBe(false);
+    expect(room.match.settings.strongFirst).toBe(false);
+    // los invitados lo reciben en la foto (para predecir la patada igual que el anfitrión)
+    const local = createMatch(stadium(), { strongFirst: true });
+    applySnapshot(local, decodeSnapshot(withAck(snapshotBody(room.match), 0)));
+    expect(local.settings.strongFirst).toBe(false);
+    room.handle(a, { t: 'roomcfg', strongFirst: true });
+    applySnapshot(local, decodeSnapshot(withAck(snapshotBody(room.match), 0)));
+    expect(local.settings.strongFirst).toBe(true);
   });
 });

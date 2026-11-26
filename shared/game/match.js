@@ -8,6 +8,8 @@ export const TICK_RATE = 60;
 export const KICK_RANGE = 4;
 export const GOAL_PAUSE_TICKS = 90; // 1,5 s de festejo antes del saque
 export const INPUT = Object.freeze({ up: 1, down: 2, left: 4, right: 8, kick: 16 });
+/** "Golpeo de primera fuerte": cuánto más fuerte sale la patada de primera (espacio mantenido). */
+export const FIRST_TIME_BOOST = 1.25;
 const DIAG = Math.SQRT1_2;
 
 export const TEAM_COLORS = Object.freeze({ red: '#e5574a', blue: '#3f7be0' });
@@ -31,7 +33,7 @@ export function withBallRadius(stadium, r) {
 export function createMatch(stadium, opts = {}) {
   const m = {
     stadium,
-    settings: { timeLimit: opts.timeLimit ?? 3, scoreLimit: opts.scoreLimit ?? 3, kickCooldown: opts.kickCooldown ?? 0, allowDraw: Boolean(opts.allowDraw) },
+    settings: { timeLimit: opts.timeLimit ?? 3, scoreLimit: opts.scoreLimit ?? 3, kickCooldown: opts.kickCooldown ?? 0, allowDraw: Boolean(opts.allowDraw), strongFirst: Boolean(opts.strongFirst) },
     world: null,
     players: [],
     phase: 'idle', // idle | kickoff | playing | goal | ended
@@ -178,7 +180,8 @@ function applyInputs(m, events) {
     if (!d) continue;
     const bits = p.input;
     const kickDown = (bits & INPUT.kick) !== 0;
-    if (kickDown && !p.kickHeld) p.kicking = true; // cada apretada permite una patada
+    const fresh = kickDown && !p.kickHeld; // recién apretada (no "de primera")
+    if (fresh) p.kicking = true; // cada apretada permite una patada
     if (!kickDown) p.kicking = false;
     p.kickHeld = kickDown;
     let ax = ((bits & INPUT.right) ? 1 : 0) - ((bits & INPUT.left) ? 1 : 0);
@@ -192,7 +195,9 @@ function applyInputs(m, events) {
     d.vy += ay * acc;
     d.damping = p.kicking ? pp.kickingDamping : pp.damping;
     if (p.cooldown > 0) p.cooldown -= 1;
-    if (p.kicking && p.cooldown === 0 && tryKick(m, p, pp)) {
+    // De primera: la patada sale con la tecla ya apretada de antes (la pelota llegó sola).
+    const boost = !fresh && m.settings.strongFirst ? FIRST_TIME_BOOST : 1;
+    if (p.kicking && p.cooldown === 0 && tryKick(m, p, pp, boost)) {
       p.kicking = false;
       p.cooldown = m.settings.kickCooldown;
       events.push({ type: 'kick', playerId: p.id });
@@ -200,7 +205,7 @@ function applyInputs(m, events) {
   }
 }
 
-function tryKick(m, p, pp) {
+function tryKick(m, p, pp, boost = 1) {
   const d = p.disc;
   let kicked = false;
   for (const b of m.world.discs) {
@@ -211,8 +216,8 @@ function tryKick(m, p, pp) {
     if (dist - b.r - d.r >= KICK_RANGE || dist === 0) continue;
     const nx = dx / dist;
     const ny = dy / dist;
-    b.vx += nx * pp.kickStrength * b.invMass;
-    b.vy += ny * pp.kickStrength * b.invMass;
+    b.vx += nx * pp.kickStrength * boost * b.invMass;
+    b.vy += ny * pp.kickStrength * boost * b.invMass;
     d.vx -= nx * pp.kickback * d.invMass;
     d.vy -= ny * pp.kickback * d.invMass;
     if (b.kind === 'ball') m.lastTouch = p.id;

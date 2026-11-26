@@ -956,13 +956,23 @@ window.addEventListener('keydown', (e) => {
   toast(before ? `${keyName(e.code)} ahora es ${label} (antes era ${KEY_ACTIONS.find((a) => a[0] === before[0])[1]}).` : `${keyName(e.code)} → ${label}.`, 2200);
 }, true);
 const pressed = new Set();
-const touchState = { bits: 0 };
+// Teclas apretadas desde el último tick, aunque ya se hayan soltado: un toque cortito (o que llega
+// junto con el soltar porque la compu se trabó un instante) igual cuenta en el tick siguiente.
+const tapped = new Set();
+const touchState = { bits: 0, tap: 0 };
+const pressKey = (code) => {
+  pressed.add(code);
+  tapped.add(code);
+};
 
 function inputBits() {
-  if (app.roomOpen || chatOpen() || modalOpen() || document.hidden) return 0;
+  const tap = touchState.tap;
+  touchState.tap = 0;
+  const blocked = app.roomOpen || chatOpen() || modalOpen() || document.hidden;
   let bits = 0;
-  for (const [name, codes] of Object.entries(KEYS)) if (codes.some((c) => pressed.has(c))) bits |= INPUT[name];
-  return bits | touchState.bits;
+  if (!blocked) for (const [name, codes] of Object.entries(KEYS)) if (codes.some((c) => pressed.has(c) || tapped.has(c))) bits |= INPUT[name];
+  tapped.clear();
+  return blocked ? 0 : bits | touchState.bits | tap;
 }
 
 function gameStep() {
@@ -1458,7 +1468,9 @@ function renderRoom() {
   $('bot-skill').value = String(r.botSkill);
   $('bot-skill').disabled = !admin;
   // Privacidad de la sala (Ajustes): solo para el admin de una sala online.
-  $('room-cfg').hidden = !admin || r.offline;
+  $('room-cfg').hidden = !admin;
+  $('cfg-online').hidden = Boolean(r.offline); // en la práctica no hay privacidad ni contraseña
+  $('cfg-first').checked = r.settings.strongFirst !== false;
   $('cfg-privacy').value = r.isPublic ? 'public' : 'private';
   if (document.activeElement !== $('cfg-max')) $('cfg-max').value = String(r.maxPlayers);
   $('cfg-pass').placeholder = r.hasPassword ? 'Tiene contraseña: escribí otra para cambiarla' : 'Sin contraseña';
@@ -1872,7 +1884,7 @@ window.addEventListener('keydown', (e) => {
   }
   // Una tecla elegida para jugar le gana a los atajos (T, Enter, + − 0).
   if (GAME_CODES.has(e.code) && !app.roomOpen && !chatOpen()) {
-    pressed.add(e.code);
+    pressKey(e.code);
     e.preventDefault();
     return undefined;
   }
@@ -1887,7 +1899,7 @@ window.addEventListener('keydown', (e) => {
   if (['Minus', 'NumpadSubtract'].includes(e.code) || e.key === '-') return setZoom(prefs.zoom / 1.15);
   if (e.code === 'Digit0') return setZoom(1);
   if (GAME_CODES.has(e.code)) {
-    pressed.add(e.code);
+    pressKey(e.code);
     e.preventDefault();
   }
   return undefined;
@@ -1904,6 +1916,7 @@ window.addEventListener('keyup', (e) => {
 });
 window.addEventListener('blur', () => {
   pressed.clear();
+  tapped.clear();
   if (statsHeld) {
     statsHeld = false;
     renderStatsPanel();
@@ -1912,6 +1925,7 @@ window.addEventListener('blur', () => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) return;
   pressed.clear();
+  tapped.clear();
   touchState.bits = 0;
 });
 $('pitch').addEventListener('wheel', (e) => {
@@ -1961,6 +1975,7 @@ function setupTouch() {
   kick.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     touchState.bits |= INPUT.kick;
+    touchState.tap |= INPUT.kick;
     kick.classList.add('on');
   });
   const kend = () => {
@@ -2089,6 +2104,7 @@ function bind() {
   $('zoom-range').addEventListener('input', (e) => setZoom(Number(e.target.value), true));
   $('bot-skill').addEventListener('change', (e) => act({ t: 'skill', value: Number(e.target.value) }));
   $('cfg-privacy').addEventListener('change', (e) => act({ t: 'roomcfg', isPublic: e.target.value === 'public' }));
+  $('cfg-first').addEventListener('change', (e) => act({ t: 'roomcfg', strongFirst: e.target.checked }));
   $('cfg-save').addEventListener('click', () => {
     const max = Number($('cfg-max').value);
     if (!Number.isInteger(max) || max < 2 || max > 30) {

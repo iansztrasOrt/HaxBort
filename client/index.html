@@ -745,6 +745,8 @@ body.touch-on .hint { display: none; }
       <label class="check"><input type="checkbox" id="opt-relator" checked> Relator en el chat (goles, asistencias, atajadas y tiros)</label>
       <div id="room-cfg" class="room-cfg" hidden>
         <h3>Sala (solo el admin)</h3>
+        <label class="check" title="Si venís con el espacio apretado y la pelota te llega, la patada sale un 25% más fuerte. Si apretás con la pelota ya al lado, pega normal."><input type="checkbox" id="cfg-first" checked> Golpeo de primera fuerte <span class="small muted">(con el espacio mantenido le pegás más fuerte)</span></label>
+        <div id="cfg-online" style="display:grid;gap:10px">
         <label class="field">Privacidad
           <select id="cfg-privacy">
             <option value="public">Pública: aparece en la lista de salas</option>
@@ -757,6 +759,7 @@ body.touch-on .hint { display: none; }
           <button class="btn" type="button" id="cfg-save">Guardar</button>
         </div>
         <button class="btn ghost" type="button" id="cfg-nopass" hidden style="justify-self:start">Sacar la contraseña</button>
+        </div>
       </div>
       <div class="row" style="justify-content:space-between;align-items:center"><h3>Tus controles</h3><button class="btn ghost" type="button" id="keys-reset" style="min-height:30px">Restablecer</button></div>
       <div class="binds" id="binds"></div>
