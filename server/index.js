@@ -16,6 +16,7 @@ import { Room, cleanText, cleanName, cleanAvatar } from '../shared/room/room.js'
 import { createTicker } from '../shared/room/ticker.js';
 import { decodeInput } from '../shared/net/protocol.js';
 import { createStore, createTorneosApi } from './torneos.js';
+import { createIceProvider } from './ice.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -24,9 +25,11 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RELAY = 0xfe;
 const MSGS_PER_SEC = 40; // mensajes de texto por conexión (las entradas binarias van aparte)
 
-export function createServer({ port = PORT, html = null, log = console.log, store = createStore(), torneoRates = {} } = {}) {
+export function createServer({ port = PORT, html = null, log = console.log, store = createStore(), torneoRates = {}, ice = createIceProvider({ log }) } = {}) {
   const torneos = createTorneosApi({ store, log, rates: torneoRates });
   torneos.warm();
+  log(ice.configured ? 'Relevo TURN: Cloudflare configurado (para redes donde la conexión directa no anda).' : 'Relevo TURN: no configurado (faltan CF_TURN_KEY_ID y CF_TURN_API_TOKEN): solo STUN y el relevo del servidor.');
+  if (ice.configured) ice.get();
   const page = () => html ?? fs.readFileSync(path.join(ROOT, 'dist/index.html'));
   const rooms = new Map(); // code → { kind: 'server', room, sockets: Map(id → ws) } | { kind: 'p2p', host: ws, summary, links: Set }
   const links = new Map(); // linkId → { code, guest: ws }
@@ -61,6 +64,14 @@ export function createServer({ port = PORT, html = null, log = console.log, stor
     if (p.startsWith('/api/torneos')) {
       const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || '';
       torneos.handle(req, res, url, ip).catch(() => { if (!res.headersSent) { res.writeHead(500); res.end(); } });
+      return;
+    }
+    if (p === '/api/ice') {
+      // Servidores para conectar las compus (con relevo TURN de Cloudflare si está configurado).
+      ice.get().then((out) => {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(out));
+      }).catch(() => { res.writeHead(500); res.end(); });
       return;
     }
     if (p === '/healthz') {

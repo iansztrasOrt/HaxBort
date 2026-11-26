@@ -14,3 +14,9 @@ services:
       # Base de datos de los torneos (Neon). El valor se carga a mano en Render → Environment.
       - key: DATABASE_URL
         sync: false
+      # Relevo TURN de Cloudflare Realtime (para redes donde las compus no se conectan directo).
+      # Se cargan a mano en Render → Environment.
+      - key: CF_TURN_KEY_ID
+        sync: false
+      - key: CF_TURN_API_TOKEN
+        sync: false

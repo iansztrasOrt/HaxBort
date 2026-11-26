@@ -12,7 +12,7 @@ import { encodeInput, decodeSnapshot, applySnapshot } from '../shared/net/protoc
 import { createRenderer, drawKit, drawDiscLabel } from './render.js';
 import { KIT_PATTERNS, KIT_PRESETS, DEFAULT_KITS, readableOn } from '../shared/game/kits.js';
 import { SAMPLE_LAB } from './sample-lab.js';
-import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker, pageBuild } from './net.js';
+import { Hub, ServerSession, HostSession, GuestSession, LocalSession, createBrowserTicker, pageBuild, loadIceServers } from './net.js';
 import { createTorneosUI, postTorneo } from './torneos.js';
 
 const $ = (id) => document.getElementById(id);
@@ -2148,6 +2148,7 @@ async function init() {
   requestAnimationFrame(loop);
   try {
     await ensureHub();
+    loadIceServers(); // servidores de conexión (relevo TURN cercano, si está configurado)
   } catch {
     setServerState();
   }

@@ -21,6 +21,44 @@ export const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
 ];
 
+// Servidores ICE del servidor del juego (/api/ice): STUN y, si está configurado, el relevo TURN de
+// Cloudflare (cercano) para cuando la conexión directa no se puede armar. Se piden una vez y se
+// renuevan cada 6 h; si no se pueden pedir, se usan los STUN de siempre.
+let iceCache = { servers: ICE_SERVERS, turn: false, at: 0 };
+let icePending = null;
+export function loadIceServers() {
+  if (iceCache.at && performance.now() - iceCache.at < 6 * 3600 * 1000) return Promise.resolve(iceCache);
+  if (typeof fetch === 'undefined' || !/^https?:$/.test(globalThis.location?.protocol || '')) return Promise.resolve(iceCache);
+  icePending ||= fetch('/api/ice', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((d) => {
+      if (Array.isArray(d?.iceServers) && d.iceServers.length) iceCache = { servers: d.iceServers, turn: Boolean(d.turn), at: performance.now() };
+      return iceCache;
+    })
+    .catch(() => iceCache)
+    .finally(() => { icePending = null; });
+  return icePending;
+}
+export const iceServersNow = () => iceCache.servers;
+
+/** ¿La conexión ya armada pasa por un relevo TURN? (para mostrarlo en pantalla) */
+async function usesRelay(pc) {
+  try {
+    const stats = await pc.getStats();
+    let pair = null;
+    stats.forEach((r) => {
+      if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId);
+    });
+    if (!pair) stats.forEach((r) => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+    if (!pair) return false;
+    const local = stats.get(pair.localCandidateId);
+    const remote = stats.get(pair.remoteCandidateId);
+    return local?.candidateType === 'relay' || remote?.candidateType === 'relay';
+  } catch {
+    return false;
+  }
+}
+
 /** Versión de esta página (la escribe el build). */
 export function pageBuild() {
   try {
@@ -364,7 +402,7 @@ class HostLink {
   }
 
   makePeer() {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: iceServersNow() });
     this.pc = pc;
     pc.onicecandidate = (e) => { if (e.candidate) this.host.hub.send({ t: 'signal', link: this.id, data: { cand: e.candidate.toJSON() } }); };
     pc.ondatachannel = (e) => {
@@ -487,6 +525,7 @@ class HostLink {
 export class HostSession extends LocalRoomBase {
   constructor(hub, code, cfg, profile) {
     super();
+    loadIceServers(); // para tener el relevo TURN listo cuando llegue el primer invitado
     this.kind = 'host';
     this.hub = hub;
     this.code = code;
@@ -584,7 +623,8 @@ export class GuestSession {
 
   async tryDirect() {
     if (typeof RTCPeerConnection === 'undefined') return false;
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    await loadIceServers();
+    const pc = new RTCPeerConnection({ iceServers: iceServersNow() });
     this.pc = pc;
     const rel = pc.createDataChannel('rel', { ordered: true });
     const fast = pc.createDataChannel('fast', { ordered: false, maxRetransmits: 0 });
@@ -601,6 +641,8 @@ export class GuestSession {
     await pc.setLocalDescription(await pc.createOffer());
     this.hub.send({ t: 'signal', link: this.link, data: { sdp: pc.localDescription.toJSON() } });
     await Promise.all([opened(rel), opened(fast)]);
+    // ¿Quedó directo o por el relevo de Cloudflare? (solo para mostrarlo; anda igual)
+    usesRelay(pc).then((relay) => { this.viaTurn = relay; });
     return pc === this.pc;
   }
 
@@ -641,7 +683,8 @@ export class GuestSession {
   }
 
   get transportLabel() {
-    return this.mode === 'dc' ? 'directo' : 'por servidor';
+    if (this.mode === 'dc') return this.viaTurn ? 'relevo cercano (Cloudflare)' : 'directo';
+    return 'por servidor';
   }
 
   down(reason) {
