@@ -457,3 +457,51 @@ describe('camisetas y privacidad', async () => {
     expect(room.maxPlayers).toBe(5);
   });
 });
+
+describe('fuerza de la patada', () => {
+  // Patea una vez con el jugador pegado a la pelota y devuelve la velocidad con que sale.
+  function kickSpeed(room, id) {
+    room.moveTo(id, 'red');
+    room.start();
+    const m = room.match;
+    const p = m.players.find((x) => x.id === id);
+    const ball = m.world.discs.find((d) => d.kind === 'ball');
+    Object.assign(ball, { x: 0, y: 0, vx: 0, vy: 0 });
+    Object.assign(p.disc, { x: -(p.disc.r + ball.r + 1), y: 0, vx: 0, vy: 0 });
+    m.phase = 'playing';
+    room.input(id, [{ seq: 1, bits: INPUT.kick }]);
+    room.step();
+    return Math.hypot(ball.vx, ball.vy);
+  }
+
+  it('la elige el admin (2 a 10, de a medio punto) y la pelota sale más fuerte', () => {
+    const base = (() => { const { room } = fakeRoom(); const a = room.addMember({ name: 'A' }).id; return kickSpeed(room, a); })();
+    const { room } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    room.handle(a, { t: 'rules', kick: 8 });
+    expect(room.settings.kickStrength).toBe(8);
+    expect(room.match.stadium.playerPhysics.kickStrength).toBe(8);
+    expect(room.state().settings.kickStrength).toBe(8);
+    const strong = kickSpeed(room, a);
+    expect(strong).toBeGreaterThan(base * 1.4);
+  });
+
+  it('rechaza valores raros; /patada y /patada default', () => {
+    const { room, sent } = fakeRoom();
+    const a = room.addMember({ name: 'A' }).id;
+    for (const bad of [1, 11, 7.3, 'x', -2]) {
+      room.handle(a, { t: 'rules', kick: bad });
+      expect(room.settings.kickStrength).toBe(null);
+    }
+    expect([...sent].reverse().find((x) => x.id === a && x.msg.t === 'sys').msg.text).toMatch(/patada/);
+    room.handle(a, { t: 'chat', text: '/patada 6,5' });
+    expect(room.settings.kickStrength).toBe(6.5);
+    room.handle(a, { t: 'chat', text: '/patada default' });
+    expect(room.settings.kickStrength).toBe(null);
+    expect(room.match.stadium.playerPhysics.kickStrength).toBe(room.stadium.playerPhysics.kickStrength);
+    // y no rompe /kick (echar)
+    const b = room.addMember({ name: 'Bruno' }).id;
+    room.handle(a, { t: 'chat', text: '/kick Bruno' });
+    expect(room.members.has(b)).toBe(false);
+  });
+});

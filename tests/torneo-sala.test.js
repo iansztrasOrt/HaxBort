@@ -153,3 +153,11 @@ describe('camisetas en el partido de torneo', () => {
     expect(room.torneo.awayAlt).toBeFalsy();
   });
 });
+
+describe('patada en el partido de torneo', () => {
+  it('se aplica la fuerza de patada del torneo', () => {
+    const { room } = sala({ rules: { time: 2, score: 0, ballRadius: null, kick: 7.5, map: 'clasica', allowDraw: true } });
+    expect(room.settings.kickStrength).toBe(7.5);
+    expect(room.match.stadium.playerPhysics.kickStrength).toBe(7.5);
+  });
+});

@@ -7,7 +7,7 @@
 
 import { loadStadium, MAX_FILE_BYTES } from '../stadium/load.js';
 import { normalizeKick } from '../stadium/tune.js';
-import { createMatch, withBallRadius, addPlayer, removePlayer, setTeam, setInput, startMatch, stopMatch, tick, INPUT, TICK_RATE } from '../game/match.js';
+import { createMatch, withBallRadius, withKickStrength, addPlayer, removePlayer, setTeam, setInput, startMatch, stopMatch, tick, INPUT, TICK_RATE } from '../game/match.js';
 import { botInput } from '../game/bot.js';
 import { BUILTIN_MAPS } from '../builtinMaps.js';
 import { snapshotBody, withAck } from '../net/protocol.js';
@@ -40,18 +40,21 @@ export function cleanText(value, max) {
 export const cleanName = (v) => cleanText(v, 20);
 export const cleanAvatar = (v) => cleanText(v, 2).replace(/\s/g, '');
 /** Límites del partido. Tiempo en minutos (0–60, de a medio minuto) y goles (0–99); 0 = sin límite. */
-export const RULE_LIMITS = { time: { min: 0, max: 60, step: 0.5 }, score: { min: 0, max: 99 }, ball: { min: 3, max: 10 } };
+export const RULE_LIMITS = { time: { min: 0, max: 60, step: 0.5 }, score: { min: 0, max: 99 }, ball: { min: 3, max: 10 }, kick: { min: 2, max: 10, step: 0.5 } };
 export function validRules(msg, current) {
   const time = msg.time === undefined ? current.timeLimit : Number(msg.time);
   const score = msg.score === undefined ? current.scoreLimit : Number(msg.score);
   const ball = msg.ball === undefined ? (current.ballRadius ?? null) : msg.ball === null || msg.ball === 'default' ? null : Number(msg.ball);
+  const kick = msg.kick === undefined ? (current.kickStrength ?? null) : msg.kick === null || msg.kick === 'default' ? null : Number(msg.kick);
   const T = RULE_LIMITS.time;
   const S = RULE_LIMITS.score;
   const B = RULE_LIMITS.ball;
+  const KK = RULE_LIMITS.kick;
   if (!Number.isFinite(time) || time < T.min || time > T.max) return { error: `El tiempo tiene que ser entre ${T.min} y ${T.max} minutos (0 = sin límite).` };
   if (!Number.isInteger(score) || score < S.min || score > S.max) return { error: `Los goles tienen que ser un número entero entre ${S.min} y ${S.max} (0 = sin límite).` };
   if (ball !== null && (!Number.isInteger(ball) || ball < B.min || ball > B.max)) return { error: `El radio de la pelota tiene que ser un número entero entre ${B.min} y ${B.max}.` };
-  return { time: Math.round(time / T.step) * T.step, score, ball };
+  if (kick !== null && (!Number.isFinite(kick) || kick < KK.min || kick > KK.max || !Number.isInteger(kick / KK.step))) return { error: `La fuerza de la patada tiene que ser entre ${KK.min} y ${KK.max} (de a medio punto; el juego trae 5).` };
+  return { time: Math.round(time / T.step) * T.step, score, ball, kick };
 }
 const norm = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const randomId = () => Math.random().toString(36).slice(2, 10);
@@ -69,7 +72,7 @@ export class Room {
     this.members = new Map();
     // Camisetas al azar (Rojo cálida, Azul fría, nunca parecidas) hasta que el admin elija otras.
     const red = randomKit('red');
-    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kits: { red, blue: randomKit('blue', Math.random, red) } }; // ballRadius null = el del estadio
+    this.settings = { timeLimit: 3, scoreLimit: 3, ballRadius: null, kickStrength: null, kits: { red, blue: randomKit('blue', Math.random, red) } }; // ballRadius null = el del estadio
     this.locked = false;
     this.paused = false;
     this.botSkill = 0.8;
@@ -103,11 +106,12 @@ export class Room {
       home: { name: cleanText(cfg.home?.name, 24) || 'Local' }, away: { name: cleanText(cfg.away?.name, 24) || 'Visitante' },
       tickets, allowDraw: Boolean(rules.allowDraw), state: 'esperando', wait: 0, pauseTicks: 0, votes: new Set(),
     };
-    const r = validRules({ time: rules.time, score: rules.score, ball: rules.ballRadius ?? null }, this.settings);
+    const r = validRules({ time: rules.time, score: rules.score, ball: rules.ballRadius ?? null, kick: rules.kick ?? null }, this.settings);
     if (!r.error) {
       this.settings.timeLimit = r.time;
       this.settings.scoreLimit = r.score;
       this.settings.ballRadius = r.ball;
+      this.settings.kickStrength = r.kick;
     }
     const home = kit(cfg.home?.kit, 'red');
     const away = (cfg.away?.kit ? cleanKit(cfg.away.kit, DEFAULT_KITS.blue) : null) || randomKit('blue', Math.random, home);
@@ -393,7 +397,7 @@ export class Room {
   }
 
   rebuildMatch() {
-    this.match = createMatch(withBallRadius(this.stadium, this.settings.ballRadius), { ...this.settings });
+    this.match = createMatch(withKickStrength(withBallRadius(this.stadium, this.settings.ballRadius), this.settings.kickStrength), { ...this.settings });
     for (const m of this.members.values()) addPlayer(this.match, { id: m.id, name: m.name, avatar: m.avatar, team: m.team });
     this.endTimer = 0;
     this.paused = false;
@@ -681,6 +685,11 @@ export class Room {
           this.rebuildMatch(); // partido parado: se rearma con la pelota nueva
           this.sys(`Pelota: radio ${r.ball ?? `${this.stadium.discs[0]?.radius ?? '-'} (el del estadio)`}.`);
         }
+        if (r.kick !== this.settings.kickStrength) {
+          this.settings.kickStrength = r.kick;
+          this.rebuildMatch(); // partido parado: se rearma con la patada nueva
+          this.sys(`Patada: fuerza ${String(r.kick ?? `${this.stadium.playerPhysics?.kickStrength ?? '-'} (la del estadio)`).replace('.', ',')}.`);
+        }
         this.dirty = true;
         return true;
       }
@@ -853,7 +862,7 @@ export class Room {
       case 'help': case 'ayuda': case 'comandos':
         [
           '/avatar XX — tu avatar (1 o 2 caracteres)', '/rojo · /azul · /espectador — cambiarte de equipo',
-          'Admin: /empezar · /parar · /pausa · /mezclar · /auto · /bloquear', 'Admin: /mapa nombre · /goles N · /tiempo N · /pelota N · /bot rojo|azul',
+          'Admin: /empezar · /parar · /pausa · /mezclar · /auto · /bloquear', 'Admin: /mapa nombre · /goles N · /tiempo N · /pelota N · /patada N · /bot rojo|azul',
           'Admin: /echar nombre · /ban nombre · /admin nombre · /clave texto (vacío = sin clave)', 'En tu pantalla: /zoom N · /limpiar · /relator (prende/apaga) · /extrapolation [ms|default]',
         ].forEach((h) => this.tell(me.id, h, 'help'));
         return true;
@@ -889,6 +898,15 @@ export class Room {
           return true;
         }
         act({ t: 'rules', ball: Number(arg) });
+        return true;
+      }
+      case 'patada': case 'fuerza': {
+        if (!arg || ['default', 'defecto', 'normal'].includes(norm(arg))) {
+          if (!arg) return this.tell(me.id, `Patada: fuerza ${this.settings.kickStrength ?? `${this.stadium.playerPhysics?.kickStrength} (la del estadio)`}. Usá /patada N (2 a 10, el juego trae 5) o /patada default.`);
+          act({ t: 'rules', kick: null });
+          return true;
+        }
+        act({ t: 'rules', kick: Number(String(arg).replace(',', '.')) });
         return true;
       }
       case 'tiempo': case 'time': {

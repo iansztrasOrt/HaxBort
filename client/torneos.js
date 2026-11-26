@@ -223,6 +223,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     else parts.push(f.idaVuelta ? 'llaves ida y vuelta' : 'partido único');
     const r = f.rules;
     parts.push(r.time ? `${String(r.time).replace('.', ',')} min` : 'sin tiempo', r.score ? `a ${r.score} goles` : 'sin límite de goles');
+    if (r.kick) parts.push(`patada ${String(r.kick).replace('.', ',')}`);
     const mapName = maps.find((m) => m.id === r.map)?.name || state.t?.maps?.[r.map]?.name;
     if (mapName) parts.push(mapName);
     return parts.join(' · ');
@@ -265,7 +266,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
           idaVuelta: g('ida').checked,
           publico: g('publico').value !== 'privado',
           inscripcion: { equipos: g('i-eq').checked, solos: g('i-solo').checked, unirse: g('i-unirse').checked },
-          rules: { time: Number(String(g('time').value).replace(',', '.')), score: Number(g('score').value), ballRadius: ball === '' ? null : Number(ball), map: g('map').value },
+          rules: { time: Number(String(g('time').value).replace(',', '.')), score: Number(g('score').value), ballRadius: ball === '' ? null : Number(ball), kick: g('kick').value.trim() === '' ? null : Number(g('kick').value.replace(',', '.')), map: g('map').value },
         },
       });
     } });
@@ -299,8 +300,9 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
         el('label', { class: 'field' }, 'Tiempo (min)', el('input', { class: 'input', id: id('time'), type: 'number', min: '0', max: '60', step: '0.5', value: String(f.rules.time) })),
         el('label', { class: 'field' }, 'Goles', el('input', { class: 'input', id: id('score'), type: 'number', min: '0', max: '99', step: '1', value: String(f.rules.score) })),
         el('label', { class: 'field' }, 'Pelota (radio)', el('input', { class: 'input', id: id('ball'), type: 'number', min: '3', max: '10', step: '1', value: f.rules.ballRadius ?? '', placeholder: 'auto' })),
+        el('label', { class: 'field' }, 'Patada (2 a 10)', el('input', { class: 'input', id: id('kick'), type: 'number', min: '2', max: '10', step: '0.5', value: f.rules.kick ?? '', placeholder: 'auto (5)' })),
         el('label', { class: 'field' }, 'Estadio', el('select', { id: id('map') }, ...mapOptions(f, opt, torneoMaps)))),
-      el('p', { class: 'small muted', text: 'Tiempo y goles: 0 = sin límite. Pelota vacía = la del estadio.' }),
+      el('p', { class: 'small muted', text: 'Tiempo y goles: 0 = sin límite. Pelota y patada vacías = las del estadio.' }),
       el('button', { class: 'btn primary', type: 'submit' }, submitLabel));
     sync();
     return form;
@@ -311,7 +313,7 @@ export function createTorneosUI({ $, el, toast, getProfile, show, maps, hostMatc
     const body = root();
     body.replaceChildren();
     const mine = readMine();
-    const defaults = { type: 'liga', teamSize: 3, maxTeams: 8, vueltas: 1, idaVuelta: false, publico: true, inscripcion: { equipos: true, solos: true, unirse: true }, rules: { time: 3, score: 3, ballRadius: null, map: 'clasica' } };
+    const defaults = { type: 'liga', teamSize: 3, maxTeams: 8, vueltas: 1, idaVuelta: false, publico: true, inscripcion: { equipos: true, solos: true, unirse: true }, rules: { time: 3, score: 3, ballRadius: null, kick: null, map: 'clasica' } };
     const create = formatForm(defaults, {
       submitLabel: 'Crear torneo',
       withName: '',

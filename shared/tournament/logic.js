@@ -26,7 +26,7 @@ export const DEFAULT_FORMAT = Object.freeze({
   idaVuelta: false, // copa: cada llave a dos partidos (si empatan en el global, desempate a gol de oro)
   publico: true, // aparece en la lista de torneos (si no, solo se entra con el código)
   inscripcion: { equipos: true, solos: true, unirse: true },
-  rules: { time: 3, score: 3, ballRadius: null, map: 'clasica' },
+  rules: { time: 3, score: 3, ballRadius: null, kick: null, map: 'clasica' }, // kick: fuerza de la patada (null = la del estadio)
 });
 
 /** Formato válido a partir de lo que mande el creador (lo que falte o no sirva, queda como estaba). */
@@ -50,6 +50,10 @@ export function cleanFormat(f, base = DEFAULT_FORMAT) {
       time: Number.isFinite(Number(rules.time)) && Number(rules.time) >= 0 && Number(rules.time) <= 60 ? Math.round(Number(rules.time) * 2) / 2 : base.rules.time,
       score: int(rules.score, 0, 99, base.rules.score),
       ballRadius: rules.ballRadius === null ? null : int(rules.ballRadius, 3, 10, base.rules.ballRadius),
+      kick: rules.kick === null ? null : (() => {
+        const k = Number(rules.kick);
+        return Number.isFinite(k) && k >= 2 && k <= 10 && Number.isInteger(k * 2) ? k : (base.rules.kick ?? null);
+      })(),
       map: typeof rules.map === 'string' && /^[a-z0-9-]{1,40}$/.test(rules.map) ? rules.map : base.rules.map,
     },
   };
@@ -590,7 +594,7 @@ export function matchRules(t, match) {
   const r = t.format.rules;
   const allowDraw = t.format.type === 'liga' || (t.format.idaVuelta && !match.desempate);
   const own = r.map.startsWith('c-') ? t.maps?.[r.map] : null; // cancha propia del torneo (la compu que arma el partido la baja)
-  return { time: r.time, score: r.score, ballRadius: r.ballRadius, map: r.map, mapName: own?.name || null, mapTune: own ? own.tune !== false : false, allowDraw };
+  return { time: r.time, score: r.score, ballRadius: r.ballRadius, kick: r.kick ?? null, map: r.map, mapName: own?.name || null, mapTune: own ? own.tune !== false : false, allowDraw };
 }
 
 /** Carga (o corrige) el resultado de un partido y hace avanzar el torneo. Lo usan el admin y el servidor. */

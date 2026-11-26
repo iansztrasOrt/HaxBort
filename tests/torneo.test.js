@@ -225,6 +225,16 @@ describe('copa', () => {
 });
 
 describe('editar la modalidad', () => {
+  it('la patada del torneo: 2 a 10 de a medio punto; vacía = la del estadio; llega a cada partido', async () => {
+    const { matchRules } = await import('../shared/tournament/logic.js');
+    expect(cleanFormat({ rules: { kick: 6.5 } }).rules.kick).toBe(6.5);
+    expect(cleanFormat({ rules: { kick: 12 } }).rules.kick).toBe(null);
+    expect(cleanFormat({ rules: { kick: null } }).rules.kick).toBe(null);
+    const t = conEquipos(nuevo({ teamSize: 1, rules: { kick: 8 } }), 2);
+    act(t, ADMIN, { t: 'empezar' });
+    expect(matchRules(t, t.rounds[0].matches[0]).kick).toBe(8);
+  });
+
   it('en inscripción se cambia todo; con equipos aprobados no se baja el máximo de equipos', () => {
     const t = conEquipos(nuevo({ teamSize: 1 }), 3);
     act(t, ADMIN, { t: 'editar', format: { type: 'copa', idaVuelta: true, rules: { time: 5, score: 7 } } });

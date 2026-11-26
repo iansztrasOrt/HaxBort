@@ -212,9 +212,9 @@ body:not(.outside) .version-tag { display: none; }
 .room-foot { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 18px; align-items: end; padding: 12px 16px 16px;
   /* Fija al pie del cuadro: tiempo, goles, estadio y Empezar/Seguir/Parar nunca quedan tapados ni cortados. */
   position: sticky; bottom: 0; z-index: 2; background: var(--panel); border-radius: 0 0 16px 16px; box-shadow: 0 -12px 18px -14px rgba(0,0,0,.7); }
-.rules { display: grid; grid-template-columns: 100px 100px 110px minmax(0, 1fr); gap: 4px 10px; align-items: end; }
-.rules .rules-hint { grid-column: 1 / 4; grid-row: 2; margin: 0; }
-.rules .stadium-field { grid-row: 1; grid-column: 4; }
+.rules { display: grid; grid-template-columns: 96px 80px 110px 80px minmax(0, 1fr); gap: 4px 10px; align-items: end; }
+.rules .rules-hint { grid-column: 1 / 5; grid-row: 2; margin: 0; }
+.rules .stadium-field { grid-row: 1; grid-column: 5; }
 .rule-input { width: 100%; font-variant-numeric: tabular-nums; }
 .rule-input.bad { border-color: #e5484d; }
 .stadium-pick { display: flex; gap: 8px; align-items: center; min-height: 42px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 0 4px 0 12px; }
@@ -492,7 +492,7 @@ body.touch-on .hint { display: none; }
   .team-arrow .ar { display: inline-block; transform: rotate(90deg); }
   .team { min-height: 0; }
   .plist { min-height: 0; }
-  .rules { grid-template-columns: 1fr 1fr 1fr; }
+  .rules { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .rules .stadium-field { grid-column: 1 / -1; grid-row: 3; }
   .room-title h1 { font-size: 22px; }
   .card { padding: 18px; }
@@ -663,6 +663,9 @@ body.touch-on .hint { display: none; }
         </label>
         <label class="field" title="Radio de la pelota (3 a 10)">Pelota (radio)
           <input class="input rule-input" id="ball-input" type="number" inputmode="numeric" min="3" max="10" step="1" value="5">
+        </label>
+        <label class="field" title="Fuerza de la patada (2 a 10; el juego trae 5)">Patada
+          <input class="input rule-input" id="kick-input" type="number" inputmode="decimal" min="2" max="10" step="0.5" value="5">
         </label>
         <p class="rules-hint small muted" id="rules-hint">Tiempo y goles: 0 = sin límite</p>
         <div class="field stadium-field">Estadio

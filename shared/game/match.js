@@ -17,6 +17,12 @@ export const TEAM_COLORS = Object.freeze({ red: '#e5574a', blue: '#3f7be0' });
  * @param {object} opts { timeLimit: minutos (0 = sin), scoreLimit (0 = sin), kickCooldown: ticks entre patadas }
  */
 /** El mismo estadio con otro radio de pelota (la pelota siempre es el disco 0). Sin `r`, igual. */
+/** El mismo estadio con otra fuerza de patada (null = la del estadio). */
+export function withKickStrength(stadium, k) {
+  if (!k || !stadium.playerPhysics || stadium.playerPhysics.kickStrength === k) return stadium;
+  return { ...stadium, playerPhysics: { ...stadium.playerPhysics, kickStrength: k } };
+}
+
 export function withBallRadius(stadium, r) {
   if (!r || !stadium.discs.length || stadium.discs[0].radius === r) return stadium;
   return { ...stadium, discs: stadium.discs.map((d, i) => (i === 0 ? { ...d, radius: r } : d)) };

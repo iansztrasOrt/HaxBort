@@ -4,7 +4,7 @@
 
 import { loadStadium } from '../shared/stadium/load.js';
 import { kickCheck, normalizeKick, KICK_REFERENCE } from '../shared/stadium/tune.js';
-import { createMatch, withBallRadius, addPlayer, startMatch, tick, setInput, INPUT, formatClock, TEAM_COLORS } from '../shared/game/match.js';
+import { createMatch, withBallRadius, withKickStrength, addPlayer, startMatch, tick, setInput, INPUT, formatClock, TEAM_COLORS } from '../shared/game/match.js';
 import { botInput } from '../shared/game/bot.js';
 import { createWorld, step as physicsStep } from '../shared/physics/world.js';
 import { BUILTIN_MAPS } from '../shared/builtinMaps.js';
@@ -725,7 +725,10 @@ function buildMatch() {
   // Radio de pelota elegido en la sala (null = el del estadio): igual que en la sala, para predecir lo mismo.
   app.mapBallRadius = st.discs[0]?.radius ?? null;
   app.builtBall = app.room?.settings?.ballRadius ?? null;
-  app.match = createMatch(withBallRadius(st, app.builtBall), {});
+  // Misma fuerza de patada que la sala (si no, la predicción de esta compu no coincidiría).
+  app.mapKick = st.playerPhysics?.kickStrength ?? null;
+  app.builtKick = app.room?.settings?.kickStrength ?? null;
+  app.match = createMatch(withKickStrength(withBallRadius(st, app.builtBall), app.builtKick), {});
   app.snapTick = -1;
   app.pending = [];
   app.offsets = new Map();
@@ -757,7 +760,7 @@ function onNet(msg) {
       const prev = app.room;
       app.room = msg;
       app.names = new Map(msg.players.map((p) => [p.id, p]));
-      if (app.map && (msg.settings?.ballRadius ?? null) !== app.builtBall) buildMatch();
+      if (app.map && ((msg.settings?.ballRadius ?? null) !== app.builtBall || (msg.settings?.kickStrength ?? null) !== app.builtKick)) buildMatch();
       if (app.match) for (const p of app.match.players) {
         const info = app.names.get(p.id);
         if (info) { p.name = info.name; p.avatar = info.avatar; }
@@ -1119,6 +1122,18 @@ function submitRules(inp) {
   const raw = inp.value.trim().replace(',', '.');
   const isTime = inp.id === 'time-input';
   const n = Number(raw);
+  if (inp.id === 'kick-input') {
+    if (raw === '' || !Number.isFinite(n) || n < 2 || n > 10 || !Number.isInteger(n * 2)) {
+      inp.classList.add('bad');
+      toast('Patada: escribí una fuerza de 2 a 10 (de a medio punto, ej. 6,5). El juego trae 5.', 3500);
+      inp.value = inp.dataset.current || inp.value;
+      setTimeout(() => inp.classList.remove('bad'), 1500);
+      return;
+    }
+    inp.classList.remove('bad');
+    act({ t: 'rules', kick: n });
+    return;
+  }
   if (inp.id === 'ball-input') {
     if (raw === '' || !Number.isInteger(n) || n < 3 || n > 10) {
       inp.classList.add('bad');
@@ -1416,7 +1431,7 @@ function renderRoom() {
   }
 
   const idle = r.phase === 'idle';
-  for (const [id, v] of [['time-input', r.settings.timeLimit], ['score-input', r.settings.scoreLimit], ['ball-input', r.settings.ballRadius ?? app.mapBallRadius ?? '']]) {
+  for (const [id, v] of [['time-input', r.settings.timeLimit], ['score-input', r.settings.scoreLimit], ['ball-input', r.settings.ballRadius ?? app.mapBallRadius ?? ''], ['kick-input', r.settings.kickStrength ?? app.mapKick ?? '']]) {
     const inp = $(id);
     inp.dataset.current = String(v);
     // No pisar lo que el admin está escribiendo.
@@ -2024,7 +2039,7 @@ function bind() {
   $('btn-stop').addEventListener('click', () => act({ t: 'stop' }));
   $('btn-pick').addEventListener('click', () => openMaps('pick'));
   $('btn-save-map').addEventListener('click', () => saveCurrentMap());
-  for (const id of ['time-input', 'score-input', 'ball-input']) {
+  for (const id of ['time-input', 'score-input', 'ball-input', 'kick-input']) {
     const inp = $(id);
     inp.addEventListener('change', () => submitRules(inp));
     inp.addEventListener('keydown', (e) => {
